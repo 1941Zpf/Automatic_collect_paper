@@ -31,7 +31,7 @@ ARXIV_API_ENDPOINTS = [
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 DEFAULT_CATEGORIES = ["cs.CV", "cs.AI"]
-TRANSLATION_CACHE_VERSION = "summary-v2"
+TRANSLATION_CACHE_VERSION = "summary-v6"
 FETCH_STATE_VERSION = "1"
 
 TOP_VENUES = [
@@ -139,6 +139,7 @@ DEFAULT_FOCUS_MATCHERS = [
 
 ACTIVE_FOCUS_TERMS = DEFAULT_FOCUS_TERMS[:]
 ACTIVE_FOCUS_MATCHERS = DEFAULT_FOCUS_MATCHERS[:]
+ACTIVE_TRANSLATION_CACHE_SALT = "default"
 
 FOCUS_TERM_ALIASES = {
     "tracking": ["tracker"],
@@ -740,6 +741,8 @@ SUMMARY_RESULT_MARKERS = (
 SUMMARY_PROBLEM_MARKERS = (
     "challenge", "problem", "task", "aim", "goal", "focuses on", "we study", "we investigate",
     "domain shift", "test-time", "distribution shift", "tracking", "adaptation",
+    "however", "struggle", "struggles", "limited", "remains challenging", "remain challenging",
+    "difficult", "fails", "failure", "gap", "bottleneck",
 )
 
 
@@ -762,18 +765,33 @@ def summary_tokens(text: str) -> set[str]:
     return tokens
 
 
-def select_summary_sentences(
+def select_summary_rows(
     title: str,
     abstract: str,
     hint_terms: Optional[List[str]] = None,
     max_sentences: int = 3,
-    max_chars: int = 520,
-) -> str:
+) -> List[Dict[str, object]]:
     sentences = split_summary_sentences(abstract)
     if not sentences:
-        return ""
+        return []
     if len(sentences) <= max(1, max_sentences):
-        return safe_text(" ".join(sentences))[:max_chars]
+        rows: List[Dict[str, object]] = []
+        for idx, sentence in enumerate(sentences):
+            lower = sentence.lower()
+            rows.append(
+                {
+                    "idx": idx,
+                    "sentence": sentence,
+                    "tokens": summary_tokens(sentence),
+                    "score": float(len(summary_tokens(sentence))),
+                    "roles": {
+                        "problem": any(marker in lower for marker in SUMMARY_PROBLEM_MARKERS),
+                        "method": any(marker in lower for marker in SUMMARY_METHOD_MARKERS),
+                        "result": any(marker in lower for marker in SUMMARY_RESULT_MARKERS),
+                    },
+                }
+            )
+        return rows
 
     title_tokens = summary_tokens(title)
     hint_token_pool: set[str] = set()
@@ -815,7 +833,16 @@ def select_summary_sentences(
         )
 
     if not rows:
-        return safe_text(" ".join(sentences[:max_sentences]))[:max_chars]
+        return [
+            {
+                "idx": idx,
+                "sentence": sentence,
+                "tokens": summary_tokens(sentence),
+                "score": 0.0,
+                "roles": {"problem": False, "method": False, "result": False},
+            }
+            for idx, sentence in enumerate(sentences[:max_sentences])
+        ]
 
     selected: List[Dict[str, object]] = []
     selected_indices: set[int] = set()
@@ -864,6 +891,25 @@ def select_summary_sentences(
         selected_indices.add(picked["idx"])
 
     selected.sort(key=lambda row: row["idx"])
+    return selected
+
+
+def summary_row_primary_role(row: Dict[str, object]) -> str:
+    roles = row.get("roles", {}) if isinstance(row.get("roles", {}), dict) else {}
+    for role in ("problem", "method", "result"):
+        if roles.get(role):
+            return role
+    return "other"
+
+
+def select_summary_sentences(
+    title: str,
+    abstract: str,
+    hint_terms: Optional[List[str]] = None,
+    max_sentences: int = 3,
+    max_chars: int = 520,
+) -> str:
+    selected = select_summary_rows(title, abstract, hint_terms=hint_terms, max_sentences=max_sentences)
     summary = safe_text(" ".join(str(row["sentence"]) for row in selected))
     if len(summary) <= max_chars:
         return summary
@@ -880,11 +926,101 @@ def select_summary_sentences(
     return safe_text(" ".join(clipped))[:max_chars]
 
 
+def compose_structured_summary_en(
+    title: str,
+    abstract: str,
+    hint_terms: Optional[List[str]] = None,
+    max_sentences: int = 3,
+) -> List[Tuple[str, str]]:
+    selected = select_summary_rows(title, abstract, hint_terms=hint_terms, max_sentences=max_sentences)
+    ordered = sorted(
+        selected,
+        key=lambda row: (
+            {"problem": 0, "method": 1, "result": 2, "other": 3}.get(summary_row_primary_role(row), 3),
+            int(row.get("idx", 0)),
+        ),
+    )
+    out: List[Tuple[str, str]] = []
+    seen: set[str] = set()
+    for row in ordered:
+        sentence = safe_text(str(row.get("sentence", "")))
+        norm = sentence.lower()
+        if not sentence or norm in seen:
+            continue
+        seen.add(norm)
+        out.append((summary_row_primary_role(row), sentence))
+    role_specific = [item for item in out if item[0] != "other"]
+    if len(role_specific) >= 2:
+        return role_specific[:max_sentences]
+    return out
+
+
+def normalize_zh_summary_sentence(text: str) -> str:
+    clean = safe_text(text)
+    if not clean:
+        return ""
+    clean = re.sub(r"^[，。；、:：\-\s]+", "", clean)
+    clean = re.sub(r"\s+", " ", clean)
+    clean = clean.strip()
+    if not clean:
+        return ""
+    if clean[-1] not in "。！？；":
+        clean += "。"
+    return clean
+
+
+def compose_google_summary_zh(
+    title: str,
+    abstract: str,
+    hint_terms: Optional[List[str]] = None,
+    timeout: int = 12,
+    full_abstract: bool = False,
+    sentences: int = 3,
+) -> str:
+    clean = safe_text(abstract)
+    if not clean:
+        return ""
+    if full_abstract:
+        try:
+            return normalize_zh_summary_sentence(google_translate_text(clean, timeout=timeout))
+        except Exception:
+            return ""
+    plan = compose_structured_summary_en(title, clean, hint_terms=hint_terms, max_sentences=max(2, sentences))
+    source_sentences = [sentence for _role, sentence in plan]
+    if not source_sentences:
+        source_sentences = split_summary_sentences(clean)[:max(2, sentences)]
+    translated_parts = google_translate_texts(source_sentences, timeout=timeout)
+    merged: List[str] = []
+    seen_parts: set[str] = set()
+    for part in translated_parts:
+        normalized = normalize_zh_summary_sentence(part)
+        dedupe_key = re.sub(r"[。！？；\s]+", "", normalized)
+        if not normalized or not dedupe_key or dedupe_key in seen_parts:
+            continue
+        seen_parts.add(dedupe_key)
+        merged.append(normalized)
+    return safe_text(" ".join(merged))
+
+
+def compose_google_summary_zh_from_parts(parts: List[str]) -> str:
+    merged: List[str] = []
+    seen_parts: set[str] = set()
+    for part in parts:
+        normalized = normalize_zh_summary_sentence(part)
+        dedupe_key = re.sub(r"[。！？；\s]+", "", normalized)
+        if not normalized or not dedupe_key or dedupe_key in seen_parts:
+            continue
+        seen_parts.add(dedupe_key)
+        merged.append(normalized)
+    return safe_text(" ".join(merged))
+
+
 def fallback_summary_zh(abstract: str) -> str:
     clean = safe_text(abstract)
     if not clean:
         return "暂无摘要信息。"
-    lead = select_summary_sentences("", clean, hint_terms=None, max_sentences=2, max_chars=240)
+    plan = compose_structured_summary_en("", clean, hint_terms=None, max_sentences=2)
+    lead = " ".join(sentence for _role, sentence in plan) or select_summary_sentences("", clean, hint_terms=None, max_sentences=2, max_chars=320)
     return f"未启用LLM中文总结，原文要点：{lead}"
 
 
@@ -900,7 +1036,8 @@ def google_summary_source(
         return ""
     if full_abstract:
         return clean
-    return select_summary_sentences(title, clean, hint_terms=hint_terms, max_sentences=max(1, sentences), max_chars=520)
+    plan = compose_structured_summary_en(title, clean, hint_terms=hint_terms, max_sentences=max(2, sentences))
+    return safe_text(" ".join(sentence for _role, sentence in plan))
 
 
 def google_translate_text(text: str, timeout: int = 12, retries: int = 2) -> str:
@@ -1841,7 +1978,11 @@ def dedupe_papers(papers: Iterable[Paper]) -> List[Paper]:
 
 
 def paper_content_hash(p: Paper) -> str:
-    raw = f"{TRANSLATION_CACHE_VERSION}\n{p.title}\n{p.summary_en}\n{p.comment}\n{p.journal_ref}"
+    raw = (
+        f"{TRANSLATION_CACHE_VERSION}\n"
+        f"{ACTIVE_TRANSLATION_CACHE_SALT}\n"
+        f"{p.title}\n{p.summary_en}\n{p.comment}\n{p.journal_ref}"
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -1927,32 +2068,42 @@ def google_enrich_title_and_summary(
         targets = targets[:limit]
     for start in range(0, len(targets), max(1, batch_size)):
         batch = targets[start:start + max(1, batch_size)]
-        texts: List[str] = []
+        title_texts: List[str] = []
+        summary_texts: List[str] = []
+        summary_ranges: List[Tuple[int, int]] = []
         for p in batch:
-            texts.append(p.title)
-            summary_source = google_summary_source(
+            title_texts.append(p.title)
+            summary_plan = compose_structured_summary_en(
                 p.title,
                 p.summary_en,
                 hint_terms=clean_tag_list(p.focus_tags) + clean_tag_list(p.domain_tags) + clean_tag_list(p.task_tags),
-                full_abstract=full_abstract,
-                sentences=summary_sentences,
             )
-            texts.append(summary_source)
-        translated = google_translate_texts(texts, timeout=timeout)
+            plan_sentences = [sentence for _role, sentence in summary_plan]
+            if full_abstract and p.summary_en:
+                plan_sentences = [safe_text(p.summary_en)]
+            if not plan_sentences and p.summary_en:
+                plan_sentences = split_summary_sentences(safe_text(p.summary_en))[:max(2, summary_sentences)]
+            start_idx = len(summary_texts)
+            summary_texts.extend(plan_sentences)
+            summary_ranges.append((start_idx, len(summary_texts)))
+        translated_titles = google_translate_texts(title_texts, timeout=timeout)
+        translated_summary_parts = google_translate_texts(summary_texts, timeout=timeout) if summary_texts else []
         for offset, p in enumerate(batch):
-            title_zh = safe_text(translated[offset * 2]) if offset * 2 < len(translated) else ""
-            summary_zh = safe_text(translated[offset * 2 + 1]) if offset * 2 + 1 < len(translated) else ""
+            title_zh = safe_text(translated_titles[offset]) if offset < len(translated_titles) else ""
+            range_start, range_end = summary_ranges[offset]
+            summary_parts = translated_summary_parts[range_start:range_end] if range_end > range_start else []
+            summary_zh = compose_google_summary_zh_from_parts(summary_parts)
             if not title_zh or not summary_zh:
                 try:
                     title_zh = title_zh or google_translate_text(p.title, timeout=timeout)
-                    summary_source = google_summary_source(
+                    summary_zh = summary_zh or compose_google_summary_zh(
                         p.title,
                         p.summary_en,
                         hint_terms=clean_tag_list(p.focus_tags) + clean_tag_list(p.domain_tags) + clean_tag_list(p.task_tags),
+                        timeout=timeout,
                         full_abstract=full_abstract,
                         sentences=summary_sentences,
                     )
-                    summary_zh = summary_zh or google_translate_text(summary_source, timeout=timeout)
                 except Exception:
                     title_zh = ""
                     summary_zh = ""
@@ -2004,7 +2155,9 @@ def llm_enrich_title_and_summary(
         "你是计算机视觉和人工智能论文助理。"
         "请输出JSON，字段：title_zh, summary_zh。"
         "title_zh要求简洁准确。"
-        "summary_zh输出2-3句，覆盖研究问题、核心方法与主要价值。"
+        "summary_zh输出2句中文摘要。"
+        "第1句说明研究问题与场景，第2句说明核心方法与主要价值/结果。"
+        "不要逐句直译原摘要，不要照搬前两句。"
         "禁止虚构实验结果。"
     )
 
@@ -2114,7 +2267,8 @@ def llm_fill_missing_translations_batched(
         "你是计算机视觉和人工智能论文助理。"
         "请将输入的每篇论文全部翻译为中文，输出JSON，字段为 items。"
         "items中的每个元素必须包含：id, title_zh, summary_zh。"
-        "不得遗漏任何输入id。title_zh准确自然。summary_zh使用2-3句中文概述问题、方法和价值。"
+        "不得遗漏任何输入id。title_zh准确自然。summary_zh使用2句中文概述问题、方法和价值。"
+        "不要逐句直译原摘要，不要机械复述开头几句。"
     )
 
     changed = 0
@@ -2378,7 +2532,7 @@ def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) 
             out.append("<tr>")
             out.append(f"<td>{idx}</td>")
             out.append(f"<td>{title_block}</td>")
-            out.append(f"<td>{html.escape(safe_text(p.summary_zh)[:220])}</td>")
+            out.append(f"<td>{html.escape(safe_text(p.summary_zh))}</td>")
             out.append(f"<td>{html.escape(safe_text(hint)[:160])}</td>")
             out.append(f"<td>{status}</td>")
             out.append(
@@ -2984,7 +3138,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
       const title = item.title_zh || item.title || item.id;
       const venue = item.accepted_venue ? `<span class="kg-paper-venue">${escapeHtml(item.accepted_venue)}</span>` : '';
       const focusBadge = item.focus ? '<span class="kg-paper-focus">Focus</span>' : '';
-      const summary = item.summary_zh ? `<p>${escapeHtml((item.summary_zh || '').slice(0, 140))}</p>` : '';
+      const summary = item.summary_zh ? `<p>${escapeHtml(item.summary_zh || '')}</p>` : '';
       const selectedClass = highlightId && highlightId === item.id ? ' is-highlight' : '';
       return `
         <li class="kg-paper-item${selectedClass}">
@@ -5018,7 +5172,7 @@ def main() -> int:
     parser.add_argument("--google-timeout", type=int, default=int(os.environ.get("GOOGLE_TRANSLATE_TIMEOUT_SECONDS", "12")))
     parser.add_argument("--google-limit", type=int, default=int(os.environ.get("GOOGLE_TRANSLATE_LIMIT", "-1")))
     parser.add_argument("--google-summary-sentences", type=int, default=int(os.environ.get("GOOGLE_SUMMARY_SENTENCES", "3")))
-    parser.add_argument("--google-full-abstract", type=int, default=int(os.environ.get("GOOGLE_TRANSLATE_FULL_ABSTRACT", "0")))
+    parser.add_argument("--google-full-abstract", type=int, default=int(os.environ.get("GOOGLE_TRANSLATE_FULL_ABSTRACT", "1")))
     parser.add_argument("--ignore-fetched", type=int, default=int(os.environ.get("IGNORE_FETCHED_ARTICLES", "1")), choices=[0, 1])
     parser.add_argument("--fetched-state-dir", type=str, default=os.environ.get("FETCH_STATE_DIR", "fetch_state"))
     parser.add_argument("--output-suffix", type=str, default=os.environ.get("REPORT_FILE_SUFFIX", ""))
@@ -5045,9 +5199,15 @@ def main() -> int:
     if not categories:
         categories = resolve_default_categories(args.domain)
 
-    global ACTIVE_FOCUS_TERMS, ACTIVE_FOCUS_MATCHERS
+    global ACTIVE_FOCUS_TERMS, ACTIVE_FOCUS_MATCHERS, ACTIVE_TRANSLATION_CACHE_SALT
     ACTIVE_FOCUS_TERMS = configure_focus_terms(args.domain, args.focus_terms, args.focus_terms_extra)
     ACTIVE_FOCUS_MATCHERS = configure_focus_matchers(ACTIVE_FOCUS_TERMS)
+    ACTIVE_TRANSLATION_CACHE_SALT = (
+        f"backend={args.translate_backend}|"
+        f"google_full={int(bool(args.google_full_abstract))}|"
+        f"google_sentences={int(args.google_summary_sentences)}|"
+        f"model={safe_text(args.model)}"
+    )
 
     os.makedirs(args.report_dir, exist_ok=True)
     os.makedirs(args.data_dir, exist_ok=True)

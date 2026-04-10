@@ -282,7 +282,7 @@ KIMI_MODEL="moonshot-v1-8k"
 - `GOOGLE_TRANSLATE_TIMEOUT_SECONDS`：默认 `12`
 - `GOOGLE_TRANSLATE_LIMIT`：默认 `-1`（Google 模式下翻译全部缺失项；调试时可设为小数字）
 - `GOOGLE_SUMMARY_SENTENCES`：默认 `3`（Google 模式下会先从完整英文摘要中抽取 2-3 句“问题/方法/结果”要点，再翻译成中文）
-- `GOOGLE_TRANSLATE_FULL_ABSTRACT`：默认 `0`，设为 `1` 时翻译完整摘要
+- `GOOGLE_TRANSLATE_FULL_ABSTRACT`：默认 `1`。在默认 Google 翻译模式下会直接翻译完整摘要；设为 `0` 时才改回摘要式翻译
 - `OPENAI_API_KEY`：用于中文翻译与中文摘要
 - `OPENAI_MODEL`：默认 `gpt-5-mini`
 

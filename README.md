@@ -1,5 +1,8 @@
 # arXiv CV 每日自动报告
 
+<img width="778" height="617" alt="image" src="https://github.com/user-attachments/assets/1f4ceb29-dc08-4688-8c2f-912f33ae504e" />
+
+
 这个脚本会自动生成每日报告，核心能力：
 
 - 仅抓取 `cs.CV`

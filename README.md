@@ -14,7 +14,7 @@
 - “中稿线索总表”包含中文标题、中文摘要，并按动态会刊分组展示
 - HTML 报告新增“论文主题探索器”独立分区：参考 arXiv Sanity 的探索思路，提供主题索引、主题/论文搜索、综合/Focus/中稿排序、局部关系图和代表论文面板
 - 支持通过入口切换 `CV/AI` 域，并自定义 Focus 主题词
-- 额外生成 Focus 池（默认聚焦 `test-time adaptation`、`multimodal object tracking`、`rgb-x tracking`、`rgb-d tracking`、`rgb-e tracking`、`rgb-t tracking`、`distribution shift`、`domain shift`，并支持你在运行时覆盖或追加）
+- 额外生成 Focus 池（默认聚焦 `test-time adaptation`、`zero-shot`、`multimodal object tracking`、`rgb-x tracking`、`rgb-d tracking`、`rgb-e tracking`、`rgb-t tracking`、`distribution shift`、`domain shift`，并支持你在运行时覆盖或追加）
 - 可选 Focus Transfer 扩展：在主日报完成后继续分析 focus 方向趋势，并逐篇判断非 focus 论文能否迁移到 focus 领域；分析结果会直接回写进主日报知识图谱右侧与图谱下方趋势区
 - LLM 翻译支持失败自动重试 + 断点续跑缓存（`data/llm_translation_cache.json`）
 
@@ -75,6 +75,96 @@
 - `reports/arxiv_digest_YYYY-MM-DD.md`
 - `data/arxiv_digest_YYYY-MM-DD.json`
 - `data/last_success_digest.json`：最近一次成功抓取的数据指针，供分析扩展自动复用。
+
+## Google Scholar 分支（独立入口）
+
+Google Scholar 没有官方的“CV 全量最新论文”feed/API，且页面抓取经常会触发验证码或限流。因此这个分支默认采用更稳妥的 Focus 关键词抓取：围绕当前 Focus 词在 Google Scholar 中检索最新相关结果，复用主流程的规则分类、Google 翻译缓存、中文标题/摘要整理和知识图谱展示。
+
+运行：
+
+```bash
+./run_google_scholar_digest.sh
+```
+
+常用参数：
+
+```bash
+./run_google_scholar_digest.sh --focus-terms "test-time adaptation,domain shift"
+./run_google_scholar_digest.sh --queries "computer vision test-time adaptation;;RGB-T tracking" --max-results 60
+./run_google_scholar_digest.sh --source serpapi
+./run_google_scholar_digest.sh --source manual --input-json data/my_scholar_results.json
+./run_google_scholar_digest.sh --source saved-html --input-html-glob 'data/scholar_pages/*.html'
+./run_google_scholar_digest.sh --source alerts --input-alert-glob 'data/scholar_alerts/*.eml'
+./run_google_scholar_digest.sh --source alerts --input-alert-mbox 'data/scholar_alerts/*.mbox'
+./run_google_scholar_digest.sh --year-from 2026
+./run_google_scholar_digest.sh --ignore-fetched 0
+```
+
+说明：
+
+- 默认 `--source auto`：如果配置了 `SERPAPI_API_KEY`，优先用 SerpAPI 的 Google Scholar 结果；否则尝试轻量 HTML 解析。
+- 默认不启用浏览器回退。`run_google_scholar_digest.sh` 现在按纯 shell 模式运行；如果当前网络/IP 被 Scholar 的 `429/sorry/captcha` 拦截，脚本会明确报错退出，并保留旧报告不变。
+- 当前实现会先对每个 Focus 词只抓 `start=0` 这一页；只有当这一页结果都已经在已抓取表里时，才会按 `data/google_scholar_query_state.json` 里记录的 `next_start` 继续扩页搜索，避免每次都把同一批 Scholar 结果反复打出来。
+- Scholar 搜索结果标题如果是 `scholar.google.com/scholar_url?...` 这种跳转链接，脚本现在会先解出外部真实论文链接；后续详情页抓完整摘要时也只会请求外部论文站点，不会再把每篇文章的详情请求打回 Google Scholar。
+- 当前实现对单个 Scholar 查询一旦遇到 `429` 就不会在同一 query 上继续重试；同时会把该 query 写入冷却状态，后续一段时间内优先使用本地缓存页，避免反复撞同一个被封入口。
+- 如果你确实要做有人值守的浏览器回退，可以显式传 `--browser-fallback 1`；但这不属于默认的无人值守 `sh` 抓取路径。
+- 如果你本机 IP 对 Scholar 实时搜索容易触发 `429`，更稳的替代方式是：
+  - `--source saved-html`：解析你在浏览器里手动打开并保存的 Scholar 结果页 HTML。
+  - `--source alerts`：解析 Google Scholar 提醒邮件导出的 `.eml` 或 `.mbox`，把 Scholar 主动推送的新论文当作输入。
+- `--query-mode all-cv` 只是 broad query best-effort，不等价于 arXiv 的 `cs.CV` 全量抓取。
+- 默认直接使用 Google Scholar 的“当年以来”过滤：运行时会自动把 `--year-from` 设为当前年份，并通过 URL 参数 `as_ylo=<当前年份>` 对应 Scholar 左侧栏里的“2026 以来”这类筛选。
+- `focus` 模式下默认对每个 Focus 关键词单独发起一条 Scholar 查询，不再额外拼接 `computer vision` 前缀，也不会把多个 Focus 词合并到同一条 query 里。
+- 本地不再额外依赖具体发布日期做筛选，时间范围以 Scholar 查询链接本身为准。
+- 默认 `--require-full-abstract 1`：会进入详情页抓完整摘要，只保留提取到完整摘要的结果，避免报告里出现“……片段……”。
+- 默认 `--ignore-fetched 1`：会读取 `data/google_scholar_seen_state.json`，把已经出现在过去 Scholar 报告里的论文跳过，只保留本次新增论文。
+- 如果你想重跑并重新输出全部当年候选，可临时用 `--ignore-fetched 0`。
+- 如果 Google Scholar 返回验证码页或 `429`，脚本不会再把当天报告覆盖成空文件，而是保留上一份已有报告不动。
+- Google Scholar 结果只有部分会带 PDF/全文链接；输出 JSON 和知识图谱中会用 `full_text_status` 标明“有全文链接”“未发现全文链接”或“未解析到完整摘要”。
+- 中稿/发表线索会从 Scholar 的 publication line 和详情页 `citation_journal_title` / `citation_conference_title` 中提取，并进入知识图谱标签与“中稿线索总表”。
+- 已抓取状态表只用于去重，不保存论文摘要/标签等详情；`data/google_scholar_seen_state.json` 里只有两部分：`keys`（身份键集合）和 `records`（最小可读记录，只含 `title / url / year / added_on`）。身份键优先顺序是 `DOI`、`arXiv ID`、规范化后的详情页 URL、规范化标题+venue+年份指纹、标题指纹。
+- 查询进度表单独维护在 `data/google_scholar_query_state.json`：它只负责记录每个 query 当前扩页到了哪一个 `start`、最近成功抓到的结果页缓存、以及最近一次被 Scholar 拉黑的时间，不参与论文正文数据存档。
+- 输出文件：
+  - `reports/google_scholar_digest_YYYY-MM-DD_scholar.html`
+  - `reports/google_scholar_digest_YYYY-MM-DD_scholar.md`
+  - `data/google_scholar_digest_YYYY-MM-DD_scholar.json`
+
+## 顶会顶刊官网监控分支（独立入口）
+
+这个分支监控 CV 领域顶会顶刊官网或官方论文索引是否出现新条目，当前默认包括：
+
+`CVPR`、`ICCV`、`ECCV`、`NeurIPS`、`ICLR`、`TPAMI`、`IJCV`、`ICML`、`AAAI`、`ACM MM`
+
+运行：
+
+```bash
+./run_venue_monitor.sh
+```
+
+常用参数：
+
+```bash
+./run_venue_monitor.sh --include-seen 1
+./run_venue_monitor.sh --per-source-limit 120
+./run_venue_monitor.sh --source-config data/my_venue_sources.json
+```
+
+说明：
+
+- 默认源覆盖 CVF OpenAccess、OpenReview/PMLR/出版社官网等公开入口；不同出版社页面结构差异很大，动态页面或订阅页可能只能解析到标题级条目或记录抓取状态。
+- 新发现条目会写入 `data/venue_monitor_state.json`，后续默认只报告未见过的新条目。
+- 可用 `--source-config` 提供 JSON 列表扩展或替换默认源，格式示例：
+
+```json
+[
+  {"venue": "CVPR", "kind": "cvf", "url": "https://openaccess.thecvf.com/CVPR2026?day=all"},
+  {"venue": "IJCV", "kind": "generic", "url": "https://link.springer.com/journal/11263/online-first"}
+]
+```
+
+- 输出文件：
+  - `reports/venue_monitor_YYYY-MM-DD_venue_monitor.html`
+  - `reports/venue_monitor_YYYY-MM-DD_venue_monitor.md`
+  - `data/venue_monitor_YYYY-MM-DD_venue_monitor.json`
 
 ## Focus Transfer 扩展（新增，不影响日报主流程）
 

@@ -83,6 +83,7 @@ SIGNAL_ALIAS_PATTERNS = [
 
 DEFAULT_FOCUS_TERMS = [
     "test-time adaptation",
+    "zero-shot",
     "multimodal object tracking",
     "rgb-x tracking",
     "rgb-d tracking",
@@ -93,6 +94,7 @@ DEFAULT_FOCUS_TERMS = [
 ]
 
 DEFAULT_FOCUS_MATCHERS = [
+    r"\bzero[- ]shot\b",
     r"multimodal object tracking",
     r"multi[- ]modal object tracking",
     r"\brgb[- ]x tracking\b",
@@ -112,6 +114,7 @@ ACTIVE_FOCUS_MATCHERS = DEFAULT_FOCUS_MATCHERS[:]
 ACTIVE_TRANSLATION_CACHE_SALT = "default"
 
 FOCUS_TERM_ALIASES = {
+    "zero-shot": ["zero shot", "zeroshot"],
     "multimodal object tracking": ["multimodal tracking", "multi-modal object tracking", "multi modal object tracking", "cross-modal tracking", "cross modal tracking"],
     "rgb-x tracking": ["rgbx tracking", "rgb-x object tracking", "rgb x tracking"],
     "rgb-d tracking": ["rgbd tracking", "rgb-d object tracking", "rgb d tracking", "rgb-depth tracking"],
@@ -230,6 +233,9 @@ def normalize_focus_term(term: str) -> str:
     clean = clean.replace("/", " ")
     clean = re.sub(r"\s+", " ", clean)
     return {
+        "zero shot": "zero-shot",
+        "zero-shot": "zero-shot",
+        "zeroshot": "zero-shot",
         "test time adaptation": "test-time adaptation",
         "test-time adaptation": "test-time adaptation",
         "multimodal object tracking": "multimodal object tracking",
@@ -1820,6 +1826,8 @@ KEYWORD_PHRASE_ALIASES = {
     "multimodal tracking": "multimodal object tracking",
     "multi modal tracking": "multimodal object tracking",
     "multi modal object tracking": "multimodal object tracking",
+    "zero shot": "zero-shot",
+    "zeroshot": "zero-shot",
     "rgb x tracking": "rgb-x tracking",
     "rgbx tracking": "rgb-x tracking",
     "rgb x object tracking": "rgb-x tracking",
@@ -2184,7 +2192,7 @@ def build_category_query(category: str) -> str:
 
 def build_focus_query(categories: List[str], focus_terms: List[str]) -> str:
     cats = " OR ".join([f"cat:{c}" for c in categories])
-    terms = " OR ".join([f"all:\"{t}\"" if " " in t else f"all:{t}" for t in focus_terms])
+    terms = " OR ".join([f"all:\"{t}\"" if (" " in t or "-" in t) else f"all:{t}" for t in focus_terms])
     return f"({cats}) AND ({terms})"
 
 

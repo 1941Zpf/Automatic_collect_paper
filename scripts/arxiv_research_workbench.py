@@ -729,6 +729,7 @@ def build_focus_memory_update_prompt(
 ) -> str:
     corpus = [compact_record_for_llm(record) for record in term_records]
     neighbor_corpus = [compact_record_for_llm(record) for record in other_focus_records[:24]]
+    current_paper_ids = [paper_id(record) for record in term_records if paper_id(record)]
     schema = {
         "focus_term": "string",
         "task_definition": "string",
@@ -753,6 +754,8 @@ def build_focus_memory_update_prompt(
         f"Focus term:\n{json.dumps(focus_term, ensure_ascii=False)}\n\n"
         "Existing long-term focus memory Markdown:\n"
         f"{truncate_text_middle(existing_note, 14000)}\n\n"
+        "Current focus-term paper_id candidates (only these ids may appear in current_representative_paper_ids):\n"
+        f"{json.dumps(current_paper_ids, ensure_ascii=False)}\n\n"
         "Current focus-term paper corpus JSON:\n"
         f"{json.dumps(corpus, ensure_ascii=False, indent=2)}\n\n"
         "Other focus-term paper corpus JSON (neighboring focus context, not the main target):\n"
@@ -766,8 +769,9 @@ def build_focus_memory_update_prompt(
         "3. 如果当前配置有多个 focus 词，必须把其他 focus 词论文作为相邻背景参考：用于发现共享动机、共用技术和潜在迁移启发，但不要把它们误写成当前 focus 词的直接证据。\n"
         "4. 如果这是首次建档，允许结合你对该 focus 任务的通用研究常识补足背景，但要克制，不要假装读过正文，不要编造具体实验数值。\n"
         "5. 技术路线要写成可用于后续迁移性判断的能力地图，例如“需要什么能力、常用机制、适合借鉴哪些外部方法”。\n"
-        "6. `current_representative_paper_ids` 必须尽量来自当前 focus-term paper corpus 的 paper_id；如果本次该 focus 词没有论文，可以返回空数组。\n"
-        "7. 每个列表控制在 4 到 10 条，避免空话；只输出 JSON 对象，不要输出 Markdown。\n\n"
+        "6. `current_representative_paper_ids` 必须只从上面的 current paper_id candidates 中选择；不要把已有记忆里的历史 paper_id、也不要把邻近 focus 词的 paper_id 复制进来。如果本次该 focus 词没有论文，可以返回空数组。\n"
+        "7. `technical_routes[*].representative_paper_ids` 也应优先引用本次 current focus-term paper corpus；如果需要保留历史视角，请写在 summary 里，而不是把历史 id 填进 `current_representative_paper_ids`。\n"
+        "8. 每个列表控制在 4 到 10 条，避免空话；只输出 JSON 对象，不要输出 Markdown。\n\n"
         f"JSON schema:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
     )
 
@@ -802,6 +806,168 @@ def validate_focus_memory_profile(profile: Optional[dict], focus_term: str, term
     if current_ids and not any(pid in current_ids for pid in current_rep_ids):
         errors.append("current_representative_paper_ids must include at least one current paper_id")
     return not errors, errors
+
+
+def dedupe_texts(items: Iterable[object]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = digest.safe_text(str(item))
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def select_current_representative_paper_ids(
+    term_records: List[Dict[str, object]],
+    profile: Optional[Dict[str, object]] = None,
+    landscape_topic: Optional[Dict[str, object]] = None,
+) -> List[str]:
+    current_ids = [paper_id(record) for record in term_records if paper_id(record)]
+    if not current_ids:
+        return []
+    current_id_set = set(current_ids)
+    chosen: List[str] = []
+    if isinstance(profile, dict):
+        chosen.extend(profile.get("current_representative_paper_ids", []) or [])
+        for route in list(profile.get("technical_routes", []) or []):
+            if not isinstance(route, dict):
+                continue
+            chosen.extend(route.get("representative_paper_ids", []) or [])
+    if isinstance(landscape_topic, dict):
+        chosen.extend(landscape_topic.get("representative_paper_ids", []) or [])
+    filtered = [pid for pid in dedupe_texts(chosen) if pid in current_id_set]
+    if filtered:
+        return filtered[: min(4, len(current_ids))]
+    return current_ids[: min(4, len(current_ids))]
+
+
+def build_minimal_focus_memory_profile(
+    focus_term: str,
+    term_records: List[Dict[str, object]],
+    landscape_topic: Optional[Dict[str, object]] = None,
+    fallback_profile: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    canonical = digest.normalize_focus_term(focus_term)
+    fallback = dict(fallback_profile or {}) if isinstance(fallback_profile, dict) else {}
+    current_rep_ids = select_current_representative_paper_ids(term_records, fallback, landscape_topic)
+    trend_summary = ""
+    hot_problems: List[str] = []
+    if isinstance(landscape_topic, dict):
+        trend_summary = digest.safe_text(str(landscape_topic.get("trend_summary", "")))
+        hot_problems = dedupe_texts(landscape_topic.get("hot_problems", []) or [])
+
+    routes: List[Dict[str, object]] = []
+    for index, record in enumerate(term_records[: max(1, min(3, len(term_records)))], start=1):
+        pid = paper_id(record)
+        if not pid:
+            continue
+        title = digest.safe_text(str(record.get("title_zh", ""))) or digest.safe_text(str(record.get("title", ""))) or pid
+        method_guess = ""
+        method_family = record.get("method_family_guess", []) or []
+        if isinstance(method_family, list):
+            method_guess = digest.safe_text(str(method_family[0])) if method_family else ""
+        route_name = method_guess or f"当前批次代表路线 {index}"
+        summary = (
+            digest.safe_text(str(record.get("summary_zh", "")))
+            or digest.safe_text(str(record.get("summary_brief_zh", "")))
+            or digest.safe_text(str(record.get("summary_brief_en", "")))
+            or digest.safe_text(str(record.get("summary_en", "")))
+        )
+        if summary:
+            summary = truncate_text_middle(summary.replace("\n", " "), 180)
+        else:
+            summary = f"代表论文《{title}》体现了当前批次中与 {canonical} 相关的一条主要研究路线。"
+        routes.append(
+            {
+                "route_name": route_name,
+                "summary": summary,
+                "representative_paper_ids": [pid],
+                "why_it_matters": f"可作为当前批次 {canonical} 方向的代表性证据，用于后续迁移性判断。",
+            }
+        )
+
+    motivations = dedupe_texts((fallback.get("motivations_and_inspirations", []) or []))[:6]
+    if not motivations:
+        motivations = [
+            f"{canonical} 在真实场景中经常伴随数据条件变化，需要模型保持稳定泛化能力。",
+            f"当前批次论文强调了 {canonical} 相关问题在不同任务和模态中的持续出现。",
+        ]
+    developments = dedupe_texts((fallback.get("development_trends_and_hotspots", []) or []) + hot_problems)[:8]
+    if trend_summary and trend_summary not in developments:
+        developments = [trend_summary] + developments
+    if not developments:
+        developments = [f"当前批次论文显示，{canonical} 仍然是值得持续跟踪的核心问题。"]
+    open_questions = dedupe_texts((fallback.get("open_questions", []) or []))[:6]
+    if not open_questions:
+        open_questions = [
+            f"如何让 {canonical} 方法在更多任务与数据条件下稳定迁移。",
+            "如何在鲁棒性、效率和泛化之间取得更好的平衡。",
+        ]
+
+    task_definition = digest.safe_text(str(fallback.get("task_definition", "")))
+    if not task_definition:
+        task_definition = f"围绕 {canonical} 相关问题，整理当前论文中的任务设定、能力需求与可迁移技术路线。"
+    update_summary = f"本次更新基于 {len(term_records)} 篇当前论文自动整理，并已强制对齐当前批次代表 paper_id。"
+
+    return {
+        "focus_term": canonical,
+        "task_definition": task_definition,
+        "technical_routes": routes or (fallback.get("technical_routes", []) or []),
+        "motivations_and_inspirations": motivations,
+        "development_trends_and_hotspots": developments,
+        "open_questions": open_questions,
+        "current_representative_paper_ids": current_rep_ids,
+        "update_summary": update_summary,
+    }
+
+
+def normalize_focus_memory_profile(
+    profile: Optional[Dict[str, object]],
+    focus_term: str,
+    term_records: List[Dict[str, object]],
+    landscape_topic: Optional[Dict[str, object]] = None,
+    fallback_profile: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    canonical = digest.normalize_focus_term(focus_term)
+    fallback = dict(fallback_profile or {}) if isinstance(fallback_profile, dict) else {}
+    normalized = dict(profile or {}) if isinstance(profile, dict) else {}
+    normalized["focus_term"] = canonical
+
+    for key in ["task_definition", "update_summary"]:
+        value = digest.safe_text(str(normalized.get(key, "")))
+        if not value:
+            value = digest.safe_text(str(fallback.get(key, "")))
+        normalized[key] = value
+
+    for key in ["motivations_and_inspirations", "development_trends_and_hotspots", "open_questions"]:
+        rows = normalized.get(key, []) or []
+        if not isinstance(rows, list) or not dedupe_texts(rows):
+            rows = fallback.get(key, []) or []
+        normalized[key] = dedupe_texts(rows)
+
+    routes = normalized.get("technical_routes", []) or []
+    if not isinstance(routes, list) or not routes:
+        routes = fallback.get("technical_routes", []) or []
+    normalized_routes: List[Dict[str, object]] = []
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        route_obj = dict(route)
+        route_obj["route_name"] = digest.safe_text(str(route_obj.get("route_name", "")))
+        route_obj["summary"] = digest.safe_text(str(route_obj.get("summary", "")))
+        route_obj["why_it_matters"] = digest.safe_text(str(route_obj.get("why_it_matters", "")))
+        route_obj["representative_paper_ids"] = dedupe_texts(route_obj.get("representative_paper_ids", []) or [])
+        normalized_routes.append(route_obj)
+    normalized["technical_routes"] = normalized_routes
+    normalized["current_representative_paper_ids"] = select_current_representative_paper_ids(
+        term_records,
+        normalized,
+        landscape_topic,
+    )
+    return normalized
 
 
 def markdown_list(items: Iterable[object], fallback: str = "暂无") -> str:
@@ -1040,13 +1206,14 @@ def update_focus_memory_files(
             print(f"[INFO] Focus memory skipped (no current records): {canonical} -> {path}")
             continue
 
+        landscape_topic = find_landscape_topic_for_term(focus_landscape, canonical)
         prompt_text = build_focus_memory_update_prompt(
             packet_name=packet_name,
             focus_term=canonical,
             existing_memory_md=existing_md,
             term_records=term_records,
             other_focus_records=other_focus_records,
-            landscape_topic=find_landscape_topic_for_term(focus_landscape, canonical),
+            landscape_topic=landscape_topic,
         )
         prompt_path = os.path.join(report_dir, f"prompt_focus_memory_{focus_memory_slug(canonical)}.md")
         digest.write_text(prompt_path, prompt_text)
@@ -1063,13 +1230,45 @@ def update_focus_memory_files(
             repair_name=f"focus_memory:{canonical}",
             max_output_tokens=max_output_tokens,
         )
-        valid, errors = validate_focus_memory_profile(result, canonical, term_records)
+        normalized = normalize_focus_memory_profile(
+            result,
+            canonical,
+            term_records,
+            landscape_topic=landscape_topic,
+            fallback_profile=cached_meta,
+        )
+        valid, errors = validate_focus_memory_profile(normalized, canonical, term_records)
         if not valid:
-            raise RuntimeError(f"Focus memory update failed for {canonical}: {'; '.join(errors)}")
-        normalized = dict(result or {})
+            fallback_normalized = normalize_focus_memory_profile(
+                cached_meta,
+                canonical,
+                term_records,
+                landscape_topic=landscape_topic,
+                fallback_profile=cached_meta,
+            )
+            fallback_valid, fallback_errors = validate_focus_memory_profile(fallback_normalized, canonical, term_records)
+            if fallback_valid:
+                normalized = fallback_normalized
+                repair_notes = repair_notes + [f"fallback: reused previous memory after invalid model output: {'; '.join(errors)}"]
+                print(f"[WARN] Focus memory fallback to previous cache: {canonical}: {'; '.join(errors)}")
+            else:
+                normalized = build_minimal_focus_memory_profile(
+                    canonical,
+                    term_records,
+                    landscape_topic=landscape_topic,
+                    fallback_profile=cached_meta,
+                )
+                minimal_valid, minimal_errors = validate_focus_memory_profile(normalized, canonical, term_records)
+                if not minimal_valid:
+                    raise RuntimeError(
+                        f"Focus memory update failed for {canonical}: {'; '.join(errors)}; "
+                        f"fallback invalid: {'; '.join(fallback_errors)}; minimal invalid: {'; '.join(minimal_errors)}"
+                    )
+                repair_notes = repair_notes + [f"fallback: synthesized minimal memory after invalid model output: {'; '.join(errors)}"]
+                print(f"[WARN] Focus memory synthesized minimal profile: {canonical}: {'; '.join(errors)}")
         normalized["_focus_term"] = canonical
         normalized["_records_hash"] = records_hash
-        normalized["_model"] = model
+        normalized["_model"] = current_analysis_model(model)
         normalized["_updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
         normalized["_repair_notes"] = repair_notes
         content = render_focus_memory_markdown(normalized, canonical, term_records)
@@ -1149,6 +1348,158 @@ def default_analysis_model() -> str:
             ),
         ),
     )
+
+
+ANALYSIS_PROVIDER_CHAIN: List[Dict[str, str]] = []
+ANALYSIS_PROVIDER_ACTIVE_INDEX = 0
+ANALYSIS_PROVIDER_ANNOUNCED_INDEX = -1
+
+
+def provider_host_label(api_base: str) -> str:
+    base = digest.normalize_api_base(api_base)
+    host = re.sub(r"^https?://", "", base).split("/", 1)[0].strip().lower()
+    return host or "unknown-host"
+
+
+def provider_name_from_base(api_base: str, explicit_name: str = "") -> str:
+    if explicit_name:
+        return explicit_name
+    base = digest.normalize_api_base(api_base).lower()
+    if "openrouter" in base:
+        return "OpenRouter"
+    if "moonshot" in base or "kimi" in base:
+        return "Kimi"
+    if "openai" in base:
+        return "OpenAI"
+    host = provider_host_label(api_base)
+    return host or "Custom"
+
+
+def provider_display(provider: Dict[str, str]) -> str:
+    name = provider_name_from_base(str(provider.get("api_base", "")), str(provider.get("name", "")))
+    host = provider_host_label(str(provider.get("api_base", "")))
+    model = digest.safe_text(str(provider.get("model", ""))) or "unknown-model"
+    return f"{name} ({host}) model={model}"
+
+
+def current_analysis_provider() -> Optional[Dict[str, str]]:
+    if 0 <= ANALYSIS_PROVIDER_ACTIVE_INDEX < len(ANALYSIS_PROVIDER_CHAIN):
+        return ANALYSIS_PROVIDER_CHAIN[ANALYSIS_PROVIDER_ACTIVE_INDEX]
+    return None
+
+
+def current_analysis_model(default_model: str = "") -> str:
+    provider = current_analysis_provider()
+    if isinstance(provider, dict):
+        model = digest.safe_text(str(provider.get("model", "")))
+        if model:
+            return model
+    return digest.safe_text(default_model)
+
+
+def build_analysis_provider_chain(
+    primary_api_base: str,
+    primary_api_key: str,
+    primary_model: str,
+) -> List[Dict[str, str]]:
+    chain: List[Dict[str, str]] = []
+    seen: set[Tuple[str, str]] = set()
+
+    def add(name: str, api_base: str, api_key: str, model: str) -> None:
+        base = digest.normalize_api_base(api_base)
+        key = digest.safe_text(api_key)
+        chosen_model = digest.safe_text(model)
+        if not base or not key or not chosen_model:
+            return
+        fingerprint = (base, chosen_model)
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        chain.append(
+            {
+                "name": provider_name_from_base(base, name),
+                "api_base": base,
+                "api_key": key,
+                "model": chosen_model,
+            }
+        )
+
+    add("Primary", primary_api_base, primary_api_key, primary_model)
+    add("OpenRouter", os.environ.get("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1"), os.environ.get("OPENROUTER_API_KEY", ""), os.environ.get("OPENROUTER_MODEL", "openrouter/elephant-alpha"))
+    add("OpenAI", os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"), os.environ.get("OPENAI_API_KEY", ""), os.environ.get("OPENAI_MODEL", ""))
+    add("Kimi", os.environ.get("KIMI_API_BASE", "https://api.moonshot.cn/v1"), os.environ.get("KIMI_API_KEY", ""), os.environ.get("KIMI_MODEL", "moonshot-v1-8k"))
+    return chain
+
+
+def configure_analysis_provider_chain(primary_api_base: str, primary_api_key: str, primary_model: str) -> List[Dict[str, str]]:
+    global ANALYSIS_PROVIDER_CHAIN, ANALYSIS_PROVIDER_ACTIVE_INDEX, ANALYSIS_PROVIDER_ANNOUNCED_INDEX
+    ANALYSIS_PROVIDER_CHAIN = build_analysis_provider_chain(primary_api_base, primary_api_key, primary_model)
+    ANALYSIS_PROVIDER_ACTIVE_INDEX = 0
+    ANALYSIS_PROVIDER_ANNOUNCED_INDEX = -1
+    if not ANALYSIS_PROVIDER_CHAIN:
+        print("[WARN] Transfer analysis provider chain is empty.")
+        return []
+    primary = ANALYSIS_PROVIDER_CHAIN[0]
+    print(f"[INFO] Transfer analysis API: {provider_display(primary)}")
+    if len(ANALYSIS_PROVIDER_CHAIN) > 1:
+        fallback_text = " -> ".join(provider_display(provider) for provider in ANALYSIS_PROVIDER_CHAIN[1:])
+        print(f"[INFO] Transfer analysis fallback chain: {fallback_text}")
+    ANALYSIS_PROVIDER_ANNOUNCED_INDEX = 0
+    return ANALYSIS_PROVIDER_CHAIN
+
+
+def announce_analysis_provider(index: int, reason: str = "active") -> None:
+    global ANALYSIS_PROVIDER_ANNOUNCED_INDEX
+    if not (0 <= index < len(ANALYSIS_PROVIDER_CHAIN)):
+        return
+    if ANALYSIS_PROVIDER_ANNOUNCED_INDEX == index:
+        return
+    provider = ANALYSIS_PROVIDER_CHAIN[index]
+    print(f"[INFO] Transfer analysis provider {reason}: {provider_display(provider)}")
+    ANALYSIS_PROVIDER_ANNOUNCED_INDEX = index
+
+
+def call_analysis_json_with_provider_fallback(
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int,
+    max_output_tokens: int,
+    endpoint_mode: str,
+    message_style: str,
+    stream: bool,
+) -> Tuple[Optional[dict], List[str]]:
+    global ANALYSIS_PROVIDER_ACTIVE_INDEX
+    if not ANALYSIS_PROVIDER_CHAIN:
+        return None, ["provider-chain empty"]
+    order = list(range(ANALYSIS_PROVIDER_ACTIVE_INDEX, len(ANALYSIS_PROVIDER_CHAIN))) + list(range(0, ANALYSIS_PROVIDER_ACTIVE_INDEX))
+    notes: List[str] = []
+    for pos, provider_index in enumerate(order):
+        provider = ANALYSIS_PROVIDER_CHAIN[provider_index]
+        result = digest.call_openai_json(
+            model=str(provider.get("model", "")),
+            api_key=str(provider.get("api_key", "")),
+            api_base=str(provider.get("api_base", "")),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            timeout=timeout,
+            max_output_tokens=max_output_tokens,
+            endpoint_mode=endpoint_mode,
+            message_style=message_style,
+            stream=stream,
+        )
+        if isinstance(result, dict):
+            if provider_index != ANALYSIS_PROVIDER_ACTIVE_INDEX:
+                previous = ANALYSIS_PROVIDER_CHAIN[ANALYSIS_PROVIDER_ACTIVE_INDEX]
+                print(f"[INFO] Transfer analysis API switched: {provider_display(previous)} -> {provider_display(provider)}")
+            ANALYSIS_PROVIDER_ACTIVE_INDEX = provider_index
+            notes.append(f"provider: {provider_display(provider)}")
+            return result, notes
+        notes.append(f"provider_failed: {provider_display(provider)}")
+        print(f"[WARN] Transfer analysis API returned no JSON: {provider_display(provider)}")
+        if pos + 1 < len(order):
+            next_provider = ANALYSIS_PROVIDER_CHAIN[order[pos + 1]]
+            print(f"[WARN] Transfer analysis API switching to fallback: {provider_display(next_provider)}")
+    return None, notes
 
 
 def build_focus_profile_prompt(packet_name: str, focus_terms: List[str], focus_records: List[Dict[str, object]]) -> str:
@@ -1243,6 +1594,190 @@ def build_focus_term_groups(
     ]
 
 
+def focus_term_group_id_map(
+    focus_terms: List[str],
+    focus_records: List[Dict[str, object]],
+    per_term_limit: int = 14,
+) -> Dict[str, List[str]]:
+    groups = build_focus_term_groups(focus_terms, focus_records, per_term_limit=per_term_limit)
+    out: Dict[str, List[str]] = {}
+    for group in groups:
+        term = digest.normalize_focus_term(str(group.get("focus_term", "")))
+        if not term:
+            continue
+        out[term] = dedupe_texts(group.get("paper_ids", []) or [])
+    return out
+
+
+def required_representative_count(available_ids: List[str]) -> int:
+    count = len(available_ids)
+    if count >= 6:
+        return 4
+    if count >= 3:
+        return 3
+    return count
+
+
+def select_landscape_representative_paper_ids(
+    available_ids: List[str],
+    topic: Optional[Dict[str, object]] = None,
+    fallback_topic: Optional[Dict[str, object]] = None,
+) -> List[str]:
+    available = dedupe_texts(available_ids)
+    if not available:
+        return []
+    available_set = set(available)
+    chosen: List[str] = []
+    if isinstance(topic, dict):
+        chosen.extend(topic.get("representative_paper_ids", []) or [])
+    if isinstance(fallback_topic, dict):
+        chosen.extend(fallback_topic.get("representative_paper_ids", []) or [])
+    filtered = [pid for pid in dedupe_texts(chosen) if pid in available_set]
+    required = required_representative_count(available)
+    if len(filtered) < required:
+        for pid in available:
+            if pid not in filtered:
+                filtered.append(pid)
+            if len(filtered) >= required:
+                break
+    return filtered[: max(required, len(filtered))]
+
+
+def build_minimal_focus_landscape_topic(
+    focus_term: str,
+    term_records: List[Dict[str, object]],
+    fallback_topic: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    canonical = digest.normalize_focus_term(focus_term)
+    available_ids = [paper_id(record) for record in term_records if paper_id(record)]
+    first_summary = ""
+    for record in term_records:
+        first_summary = (
+            digest.safe_text(str(record.get("summary_brief_zh", "")))
+            or digest.safe_text(str(record.get("summary_zh", "")))
+            or digest.safe_text(str(record.get("summary_brief_en", "")))
+            or digest.safe_text(str(record.get("summary_en", "")))
+        )
+        if first_summary:
+            break
+    if first_summary:
+        trend_summary = truncate_text_middle(first_summary.replace("\n", " "), 180)
+    else:
+        trend_summary = f"当前批次论文显示，{canonical} 仍是一个持续活跃且具备迁移价值的重点主题。"
+    hot_problems = dedupe_texts((fallback_topic or {}).get("hot_problems", []) or [])[:4]
+    if not hot_problems:
+        hot_problems = [
+            f"{canonical} 在不同任务与数据条件下的稳健泛化",
+            f"{canonical} 场景下的方法效率与部署成本",
+            f"{canonical} 与相邻任务之间的能力迁移",
+        ][: max(1, min(3, len(available_ids) or 3))]
+    return {
+        "focus_term": canonical,
+        "trend_summary": trend_summary,
+        "hot_problems": hot_problems,
+        "representative_paper_ids": select_landscape_representative_paper_ids(available_ids, fallback_topic=fallback_topic),
+    }
+
+
+def build_minimal_focus_landscape(
+    focus_terms: List[str],
+    focus_records: List[Dict[str, object]],
+    fallback_summary: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    term_groups = build_focus_term_groups(focus_terms, focus_records)
+    fallback_topics = {
+        digest.normalize_focus_term(str(topic.get("focus_term", ""))): topic
+        for topic in list((fallback_summary or {}).get("focus_topics", []) or [])
+        if isinstance(topic, dict) and digest.normalize_focus_term(str(topic.get("focus_term", "")))
+    }
+    topics: List[Dict[str, object]] = []
+    covered: set[str] = set()
+    for group in term_groups:
+        term = digest.normalize_focus_term(str(group.get("focus_term", "")))
+        if not term or term in covered:
+            continue
+        records = list(group.get("papers", []) or [])
+        topics.append(build_minimal_focus_landscape_topic(term, records, fallback_topics.get(term)))
+        covered.add(term)
+    overall_summary = digest.safe_text(str((fallback_summary or {}).get("overall_summary", "")))
+    if not overall_summary:
+        overall_summary = (
+            f"当前 focus 语料共覆盖 {len(topics)} 个活跃主题，"
+            "摘要结果已按主题整理代表论文与热点问题，可直接用于后续可迁移性判断。"
+        )
+    return {"overall_summary": overall_summary, "focus_topics": topics}
+
+
+def normalize_focus_landscape(
+    summary: Optional[Dict[str, object]],
+    focus_terms: List[str],
+    focus_records: List[Dict[str, object]],
+    fallback_summary: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    term_groups = build_focus_term_groups(focus_terms, focus_records)
+    group_records = {
+        digest.normalize_focus_term(str(group.get("focus_term", ""))): list(group.get("papers", []) or [])
+        for group in term_groups
+        if digest.normalize_focus_term(str(group.get("focus_term", "")))
+    }
+    group_ids = {
+        term: [paper_id(record) for record in records if paper_id(record)]
+        for term, records in group_records.items()
+    }
+    fallback_topics = {
+        digest.normalize_focus_term(str(topic.get("focus_term", ""))): dict(topic)
+        for topic in list((fallback_summary or {}).get("focus_topics", []) or [])
+        if isinstance(topic, dict) and digest.normalize_focus_term(str(topic.get("focus_term", "")))
+    }
+    normalized = dict(summary or {}) if isinstance(summary, dict) else {}
+    normalized_topics: List[Dict[str, object]] = []
+    seen_terms: set[str] = set()
+    for topic in list(normalized.get("focus_topics", []) or []):
+        if not isinstance(topic, dict):
+            continue
+        term = digest.normalize_focus_term(str(topic.get("focus_term", "")))
+        if not term or term in seen_terms:
+            continue
+        fallback_topic = fallback_topics.get(term)
+        records = group_records.get(term, [])
+        available_ids = group_ids.get(term, [])
+        topic_obj = dict(topic)
+        topic_obj["focus_term"] = term
+        topic_obj["trend_summary"] = (
+            digest.safe_text(str(topic_obj.get("trend_summary", "")))
+            or digest.safe_text(str((fallback_topic or {}).get("trend_summary", "")))
+        )
+        topic_obj["hot_problems"] = dedupe_texts(topic_obj.get("hot_problems", []) or []) or dedupe_texts((fallback_topic or {}).get("hot_problems", []) or [])
+        topic_obj["representative_paper_ids"] = select_landscape_representative_paper_ids(
+            available_ids,
+            topic_obj,
+            fallback_topic,
+        )
+        if (not topic_obj["trend_summary"]) or (not topic_obj["hot_problems"]):
+            topic_obj = build_minimal_focus_landscape_topic(term, records, fallback_topic)
+        normalized_topics.append(topic_obj)
+        seen_terms.add(term)
+    for group in term_groups:
+        term = digest.normalize_focus_term(str(group.get("focus_term", "")))
+        if not term or term in seen_terms:
+            continue
+        normalized_topics.append(
+            build_minimal_focus_landscape_topic(
+                term,
+                list(group.get("papers", []) or []),
+                fallback_topics.get(term),
+            )
+        )
+        seen_terms.add(term)
+    normalized["focus_topics"] = normalized_topics
+    normalized["overall_summary"] = (
+        digest.safe_text(str(normalized.get("overall_summary", "")))
+        or digest.safe_text(str((fallback_summary or {}).get("overall_summary", "")))
+        or build_minimal_focus_landscape(focus_terms, focus_records, fallback_summary).get("overall_summary", "")
+    )
+    return normalized
+
+
 def build_focus_landscape_prompt(packet_name: str, focus_terms: List[str], focus_records: List[Dict[str, object]]) -> str:
     term_groups = build_focus_term_groups(focus_terms, focus_records)
     schema = {
@@ -1266,7 +1801,7 @@ def build_focus_landscape_prompt(packet_name: str, focus_terms: List[str], focus
         "1. 如果 focus 关键词有多个，就按每个 focus_term 分别总结，不要把不同 focus_term 混成一段。\n"
         "2. `trend_summary` 要概括这个 focus_term 近期在做什么、方向怎么变化。\n"
         "3. `hot_problems` 只写真正被重复追逐的问题，避免空话。\n"
-        "4. `representative_paper_ids` 必须来自对应 focus_term 的 paper_ids，并且要尽量覆盖代表性论文，而不是只给 1 篇。\n"
+        "4. `representative_paper_ids` 必须只来自对应 focus_term 那一组的 `paper_ids`，不能混用别的 focus_term 的 id，也不能沿用历史旧 id。\n"
         "5. 若某个 focus_term 给出的候选论文不少于 6 篇，则至少返回 4 篇代表论文；若候选论文为 3 到 5 篇，则至少返回 3 篇；若不足 3 篇，则尽量全部返回。\n"
         "6. 只输出一个 JSON 对象。\n\n"
         f"JSON schema:\n{json.dumps(schema, ensure_ascii=False, indent=2)}"
@@ -1286,19 +1821,19 @@ def validate_focus_landscape(summary: Optional[dict], focus_terms: List[str], fo
     paper_ids = {paper_id(record) for record in focus_records if paper_id(record)}
     term_groups = build_focus_term_groups(focus_terms, focus_records)
     term_group_ids = {
-        digest.safe_text(str(group.get("focus_term", ""))): [
+        digest.normalize_focus_term(str(group.get("focus_term", ""))): [
             digest.safe_text(str(pid)) for pid in list(group.get("paper_ids", []) or []) if digest.safe_text(str(pid))
         ]
         for group in term_groups
-        if isinstance(group, dict) and digest.safe_text(str(group.get("focus_term", "")))
+        if isinstance(group, dict) and digest.normalize_focus_term(str(group.get("focus_term", "")))
     }
-    valid_terms = {digest.safe_text(term) for term in focus_terms if digest.safe_text(term)}
+    valid_terms = {digest.normalize_focus_term(term) for term in focus_terms if digest.normalize_focus_term(term)}
     seen_terms: set[str] = set()
     for topic in topics:
         if not isinstance(topic, dict):
             errors.append("focus_topics contains non-object")
             continue
-        term = digest.safe_text(str(topic.get("focus_term", "")))
+        term = digest.normalize_focus_term(str(topic.get("focus_term", "")))
         if not term:
             errors.append("focus_topic missing focus_term")
         elif valid_terms and term not in valid_terms:
@@ -1660,10 +2195,7 @@ def call_json_with_repair(
 ) -> Tuple[Optional[dict], List[str]]:
     system_prompt = build_analysis_system_prompt()
     notes: List[str] = []
-    result = digest.call_openai_json(
-        model=model,
-        api_key=api_key,
-        api_base=api_base,
+    result, provider_notes = call_analysis_json_with_provider_fallback(
         system_prompt=system_prompt,
         user_prompt=prompt_text,
         timeout=timeout,
@@ -1672,6 +2204,7 @@ def call_json_with_repair(
         message_style=message_style,
         stream=stream,
     )
+    notes.extend(provider_notes)
     valid, errors = validator(result)
     if valid:
         return result, notes
@@ -1682,10 +2215,7 @@ def call_json_with_repair(
         + "\n".join(f"- {err}" for err in errors)
         + "\n\n只重新输出一个合法的 JSON 对象，不要输出解释。"
     )
-    result2 = digest.call_openai_json(
-        model=model,
-        api_key=api_key,
-        api_base=api_base,
+    result2, provider_notes2 = call_analysis_json_with_provider_fallback(
         system_prompt=system_prompt,
         user_prompt=repair_prompt,
         timeout=timeout,
@@ -1694,6 +2224,7 @@ def call_json_with_repair(
         message_style=message_style,
         stream=stream,
     )
+    notes.extend(provider_notes2)
     valid2, errors2 = validator(result2)
     if valid2:
         notes.append("repair: success")
@@ -3928,10 +4459,39 @@ def run_focus_landscape_analysis(
         repair_name="focus_landscape",
         max_output_tokens=max_output_tokens,
     )
-    valid, errors = validate_focus_landscape(result, focus_terms, analysis_focus)
+    normalized = normalize_focus_landscape(
+        result,
+        focus_terms,
+        analysis_focus,
+        fallback_summary=existing,
+    )
+    valid, errors = validate_focus_landscape(normalized, focus_terms, analysis_focus)
     if not valid:
-        raise RuntimeError(f"Focus landscape analysis failed validation: {'; '.join(errors)}")
-    normalized = dict(result or {})
+        fallback_normalized = normalize_focus_landscape(
+            existing,
+            focus_terms,
+            analysis_focus,
+            fallback_summary=existing,
+        )
+        fallback_valid, fallback_errors = validate_focus_landscape(fallback_normalized, focus_terms, analysis_focus)
+        if fallback_valid:
+            normalized = fallback_normalized
+            repair_notes = repair_notes + [f"fallback: reused previous focus landscape after invalid model output: {'; '.join(errors)}"]
+            print(f"[WARN] Focus landscape fallback to previous cache: {'; '.join(errors)}")
+        else:
+            normalized = build_minimal_focus_landscape(
+                focus_terms,
+                analysis_focus,
+                fallback_summary=existing,
+            )
+            minimal_valid, minimal_errors = validate_focus_landscape(normalized, focus_terms, analysis_focus)
+            if not minimal_valid:
+                raise RuntimeError(
+                    f"Focus landscape analysis failed validation: {'; '.join(errors)}; "
+                    f"fallback invalid: {'; '.join(fallback_errors)}; minimal invalid: {'; '.join(minimal_errors)}"
+                )
+            repair_notes = repair_notes + [f"fallback: synthesized minimal focus landscape after invalid model output: {'; '.join(errors)}"]
+            print(f"[WARN] Focus landscape synthesized minimal profile: {'; '.join(errors)}")
     normalized["_focus_hash"] = focus_hash
     normalized["_repair_notes"] = repair_notes
     digest.dump_json(os.path.join(data_dir, "focus_landscape_trends.json"), normalized)
@@ -4020,7 +4580,7 @@ def run_candidate_transfer_note_analyses(
                 normalized["_repair_notes"] = repair_notes
         normalized["_candidate_hash"] = candidate_content_hash
         normalized["_focus_landscape_hash"] = focus_hash
-        normalized["_model"] = model
+        normalized["_model"] = current_analysis_model(model)
         judgments.append(normalized)
         print(f"[INFO] Transfer note done {index}/{total}: {pid} -> {normalized['decision']}")
         digest.dump_json(
@@ -4167,7 +4727,7 @@ def run_candidate_analyses(
                 normalized["_repair_notes"] = repair_notes
         normalized["_candidate_hash"] = candidate_content_hash
         normalized["_focus_profile_hash"] = focus_profile_hash
-        normalized["_model"] = model
+        normalized["_model"] = current_analysis_model(model)
         judgments.append(normalized)
         print(f"[INFO] Transfer judgment done {index}/{total}: {pid} -> {normalized['decision']}/{normalized['confidence']}")
         digest.dump_json(
@@ -4378,6 +4938,10 @@ def main() -> int:
         endpoint_mode = digest.normalize_openai_endpoint_mode(args.analysis_endpoint_mode)
         message_style = digest.normalize_openai_message_style(args.analysis_message_style)
         stream = bool(args.analysis_stream)
+        provider_chain = configure_analysis_provider_chain(args.analysis_api_base, api_key, model)
+        if not provider_chain:
+            print("[ERROR] No usable Transfer analysis API providers are configured.", file=sys.stderr)
+            return 2
 
         focus_landscape = run_focus_landscape_analysis(
             model=model,
@@ -4504,8 +5068,12 @@ def main() -> int:
         "transfer_candidate_count": len(transfer_candidate_records),
         "analyzed_candidate_count": len(analyzed_candidates),
         "analysis_backend": args.analysis_backend,
-        "analysis_api_base": args.analysis_api_base if args.analysis_backend == "local" else "",
-        "analysis_model": args.analysis_model if args.analysis_backend == "local" else "",
+        "analysis_api_base": str((current_analysis_provider() or {}).get("api_base", args.analysis_api_base)) if args.analysis_backend == "local" else "",
+        "analysis_model": current_analysis_model(args.analysis_model) if args.analysis_backend == "local" else "",
+        "analysis_provider_chain": [
+            {"name": provider.get("name", ""), "api_base": provider.get("api_base", ""), "model": provider.get("model", "")}
+            for provider in ANALYSIS_PROVIDER_CHAIN
+        ] if args.analysis_backend == "local" else [],
         "focus_profile_path": os.path.join(data_dir, "focus_landscape_trends.json"),
         "focus_memory_dir": os.path.abspath(args.focus_memory_dir),
         "focus_memory_files_path": os.path.join(data_dir, "focus_memory_files.json"),

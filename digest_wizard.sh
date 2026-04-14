@@ -259,7 +259,7 @@ build_preset_command() {
       CMD+=(
         "--domain" "cv"
         "--categories" ""
-        "--focus-terms" "test-time adaptation,multimodal object tracking,rgb-x tracking,rgb-d tracking,rgb-e tracking,rgb-t tracking,distribution shift,domain shift"
+        "--focus-terms" "test-time adaptation,zero-shot,multimodal object tracking,rgb-x tracking,rgb-d tracking,rgb-e tracking,rgb-t tracking,distribution shift,domain shift"
         "--focus-terms-extra" ""
         "--focus-latest" "100"
         "--focus-recent-scan" "1600"

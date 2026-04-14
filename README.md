@@ -14,7 +14,8 @@
 - “中稿线索总表”包含中文标题、中文摘要，并按动态会刊分组展示
 - HTML 报告新增“论文主题探索器”独立分区：参考 arXiv Sanity 的探索思路，提供主题索引、主题/论文搜索、综合/Focus/中稿排序、局部关系图和代表论文面板
 - 支持通过入口切换 `CV/AI` 域，并自定义 Focus 主题词
-- 额外生成 Focus 池（tracking / 多模态融合 / TTA / domain shift / prompt tuning / distribution shift / online adaptation 等）
+- 额外生成 Focus 池（默认聚焦 `test-time adaptation`、`multimodal object tracking`、`rgb-x tracking`、`rgb-d tracking`、`rgb-e tracking`、`rgb-t tracking`、`distribution shift`、`domain shift`，并支持你在运行时覆盖或追加）
+- 可选 Focus Transfer 扩展：在主日报完成后继续分析 focus 方向趋势，并逐篇判断非 focus 论文能否迁移到 focus 领域；分析结果会直接回写进主日报知识图谱右侧与图谱下方趋势区
 - LLM 翻译支持失败自动重试 + 断点续跑缓存（`data/llm_translation_cache.json`）
 
 ## 运行
@@ -44,6 +45,8 @@
 ./digest_wizard.sh --dry-run --default
 ```
 
+每次通过 `./run_daily_digest.sh` 或 `./digest_wizard.sh` 生成新报告前，脚本都会先把 `reports/` 根目录中已有的旧日报 `html/md` 文件整理到 `reports/previous_reports/` 中；`reports/focus_transfer/` 不会被移动或改动。
+
 底层直接运行：
 
 ```bash
@@ -69,151 +72,295 @@
 ## 输出文件
 
 - `reports/arxiv_digest_YYYY-MM-DD.html`
-- `reports/arxiv_digest_latest.html`
 - `reports/arxiv_digest_YYYY-MM-DD.md`
 - `data/arxiv_digest_YYYY-MM-DD.json`
+- `data/last_success_digest.json`：最近一次成功抓取的数据指针，供分析扩展自动复用。
 
-## 研究工作台（新增，不影响日报主流程）
+## Google Scholar 分支（独立入口）
 
-如果你想在现有系统之外，额外生成：
+Google Scholar 没有官方的“CV 全量最新论文”feed/API，且页面抓取经常会触发验证码或限流。因此这个分支默认采用更稳妥的 Focus 关键词抓取：围绕当前 Focus 词在 Google Scholar 中检索最新相关结果，复用主流程的规则分类、Google 翻译缓存、中文标题/摘要整理和知识图谱展示。
 
-- 最近 1-3 个月 `test-time adaptation` 方向论文包
-- 最近 1-2 天整个 `cs.CV` 论文包
-- 一套给 ChatGPT / 桌面版 ChatGPT 直接使用的提示词与研究语料
+运行：
 
-可以运行：
+```bash
+./run_google_scholar_digest.sh
+```
+
+常用参数：
+
+```bash
+./run_google_scholar_digest.sh --focus-terms "test-time adaptation,domain shift"
+./run_google_scholar_digest.sh --queries "computer vision test-time adaptation;;RGB-T tracking" --max-results 60
+./run_google_scholar_digest.sh --source serpapi
+./run_google_scholar_digest.sh --source manual --input-json data/my_scholar_results.json
+./run_google_scholar_digest.sh --source saved-html --input-html-glob 'data/scholar_pages/*.html'
+./run_google_scholar_digest.sh --source alerts --input-alert-glob 'data/scholar_alerts/*.eml'
+./run_google_scholar_digest.sh --source alerts --input-alert-mbox 'data/scholar_alerts/*.mbox'
+./run_google_scholar_digest.sh --year-from 2026
+./run_google_scholar_digest.sh --ignore-fetched 0
+```
+
+说明：
+
+- 默认 `--source auto`：如果配置了 `SERPAPI_API_KEY`，优先用 SerpAPI 的 Google Scholar 结果；否则尝试轻量 HTML 解析。
+- 默认不启用浏览器回退。`run_google_scholar_digest.sh` 现在按纯 shell 模式运行；如果当前网络/IP 被 Scholar 的 `429/sorry/captcha` 拦截，脚本会明确报错退出，并保留旧报告不变。
+- 当前实现会先对每个 Focus 词只抓 `start=0` 这一页；只有当这一页结果都已经在已抓取表里时，才会按 `data/google_scholar_query_state.json` 里记录的 `next_start` 继续扩页搜索，避免每次都把同一批 Scholar 结果反复打出来。
+- Scholar 搜索结果标题如果是 `scholar.google.com/scholar_url?...` 这种跳转链接，脚本现在会先解出外部真实论文链接；后续详情页抓完整摘要时也只会请求外部论文站点，不会再把每篇文章的详情请求打回 Google Scholar。
+- 当前实现对单个 Scholar 查询一旦遇到 `429` 就不会在同一 query 上继续重试；同时会把该 query 写入冷却状态，后续一段时间内优先使用本地缓存页，避免反复撞同一个被封入口。
+- 如果你确实要做有人值守的浏览器回退，可以显式传 `--browser-fallback 1`；但这不属于默认的无人值守 `sh` 抓取路径。
+- 如果你本机 IP 对 Scholar 实时搜索容易触发 `429`，更稳的替代方式是：
+  - `--source saved-html`：解析你在浏览器里手动打开并保存的 Scholar 结果页 HTML。
+  - `--source alerts`：解析 Google Scholar 提醒邮件导出的 `.eml` 或 `.mbox`，把 Scholar 主动推送的新论文当作输入。
+- `--query-mode all-cv` 只是 broad query best-effort，不等价于 arXiv 的 `cs.CV` 全量抓取。
+- 默认直接使用 Google Scholar 的“当年以来”过滤：运行时会自动把 `--year-from` 设为当前年份，并通过 URL 参数 `as_ylo=<当前年份>` 对应 Scholar 左侧栏里的“2026 以来”这类筛选。
+- `focus` 模式下默认对每个 Focus 关键词单独发起一条 Scholar 查询，不再额外拼接 `computer vision` 前缀，也不会把多个 Focus 词合并到同一条 query 里。
+- 本地不再额外依赖具体发布日期做筛选，时间范围以 Scholar 查询链接本身为准。
+- 默认 `--require-full-abstract 1`：会进入详情页抓完整摘要，只保留提取到完整摘要的结果，避免报告里出现“……片段……”。
+- 默认 `--ignore-fetched 1`：会读取 `data/google_scholar_seen_state.json`，把已经出现在过去 Scholar 报告里的论文跳过，只保留本次新增论文。
+- 如果你想重跑并重新输出全部当年候选，可临时用 `--ignore-fetched 0`。
+- 如果 Google Scholar 返回验证码页或 `429`，脚本不会再把当天报告覆盖成空文件，而是保留上一份已有报告不动。
+- Google Scholar 结果只有部分会带 PDF/全文链接；输出 JSON 和知识图谱中会用 `full_text_status` 标明“有全文链接”“未发现全文链接”或“未解析到完整摘要”。
+- 中稿/发表线索会从 Scholar 的 publication line 和详情页 `citation_journal_title` / `citation_conference_title` 中提取，并进入知识图谱标签与“中稿线索总表”。
+- 已抓取状态表只用于去重，不保存论文摘要/标签等详情；`data/google_scholar_seen_state.json` 里只有两部分：`keys`（身份键集合）和 `records`（最小可读记录，只含 `title / url / year / added_on`）。身份键优先顺序是 `DOI`、`arXiv ID`、规范化后的详情页 URL、规范化标题+venue+年份指纹、标题指纹。
+- 查询进度表单独维护在 `data/google_scholar_query_state.json`：它只负责记录每个 query 当前扩页到了哪一个 `start`、最近成功抓到的结果页缓存、以及最近一次被 Scholar 拉黑的时间，不参与论文正文数据存档。
+- 输出文件：
+  - `reports/google_scholar_digest_YYYY-MM-DD_scholar.html`
+  - `reports/google_scholar_digest_YYYY-MM-DD_scholar.md`
+  - `data/google_scholar_digest_YYYY-MM-DD_scholar.json`
+
+## 顶会顶刊官网监控分支（独立入口）
+
+这个分支监控 CV 领域顶会顶刊官网或官方论文索引是否出现新条目，当前默认包括：
+
+`CVPR`、`ICCV`、`ECCV`、`NeurIPS`、`ICLR`、`TPAMI`、`IJCV`、`ICML`、`AAAI`、`ACM MM`
+
+运行：
+
+```bash
+./run_venue_monitor.sh
+```
+
+常用参数：
+
+```bash
+./run_venue_monitor.sh --include-seen 1
+./run_venue_monitor.sh --per-source-limit 120
+./run_venue_monitor.sh --source-config data/my_venue_sources.json
+```
+
+说明：
+
+- 默认源覆盖 CVF OpenAccess、OpenReview/PMLR/出版社官网等公开入口；不同出版社页面结构差异很大，动态页面或订阅页可能只能解析到标题级条目或记录抓取状态。
+- 新发现条目会写入 `data/venue_monitor_state.json`，后续默认只报告未见过的新条目。
+- 可用 `--source-config` 提供 JSON 列表扩展或替换默认源，格式示例：
+
+```json
+[
+  {"venue": "CVPR", "kind": "cvf", "url": "https://openaccess.thecvf.com/CVPR2026?day=all"},
+  {"venue": "IJCV", "kind": "generic", "url": "https://link.springer.com/journal/11263/online-first"}
+]
+```
+
+- 输出文件：
+  - `reports/venue_monitor_YYYY-MM-DD_venue_monitor.html`
+  - `reports/venue_monitor_YYYY-MM-DD_venue_monitor.md`
+  - `data/venue_monitor_YYYY-MM-DD_venue_monitor.json`
+
+## Focus Transfer 扩展（新增，不影响日报主流程）
+
+这个扩展现在的目标是：
+
+- 直接复用主分支已经生成好的日报 JSON
+- 自动读取其中的 focus 论文和所有非 focus 论文，非 focus 全量仍用于报告展示
+- 先用 OpenRouter Elephant（或你显式配置的 OpenAI-compatible 模型）分析 focus 方向的发展趋势与热点问题
+- 再只对非 focus 中具备中稿线索的论文逐篇分析，判断它们的思想是否可以迁移到 focus 领域、如果可以该怎么迁移
+- 分析完成后会把结果直接整合回主日报：
+  - 顶部新增“可迁移性分析”状态区
+  - 知识图谱右侧具体论文卡片增加“可迁移”标签与“可迁移思路”
+  - 知识图谱下方紧接着追加“发展趋势与热点问题”
+- 同时仍然保留一个独立的扩展 HTML 报告，方便单独复查分析过程
+
+这个扩展现在默认启用；如果你不想在某次日报里做可迁移性分析，也可以显式关闭，而且不会影响日报主流程。
+
+### 主入口里如何启用
+
+1. `./digest_wizard.sh`
+
+交互式运行时，执行前会额外询问：
+
+- 是否启用 Focus Transfer 应用扩展
+
+默认启用。
+
+2. `./run_daily_digest.sh`
+
+直接运行时，如果是在终端交互环境下，脚本会先询问你这次是否继续做可迁移性分析，默认回答为“是”。
+
+如果你想显式开启：
+
+```bash
+./run_daily_digest.sh --with-focus-transfer
+```
+
+如果想显式关闭：
+
+```bash
+./run_daily_digest.sh --without-focus-transfer
+```
+
+如果只想先做扩展骨架验证，不调用模型：
+
+```bash
+./run_daily_digest.sh --with-focus-transfer --focus-transfer-backend none
+```
+
+注意：
+
+- 即使扩展失败，主日报 HTML / JSON 仍然会先正常生成，不会被扩展拖垮。
+- 如果不启用扩展，主日报顶部会明确显示“当前未分析可迁移性”。
+
+### 独立运行扩展
+
+如果你已经有日报 JSON，想单独重跑扩展分析：
+
+```bash
+./run_focus_transfer_extension.sh
+```
+
+默认会自动读取最近一次主日报成功生成的：
+
+```bash
+data/last_success_digest.json
+```
+
+并在分析完成后自动回写对应的主日报 HTML / JSON。
+
+另外，独立运行扩展前，脚本会先把 `reports/focus_transfer/` 和 `data/focus_transfer/` 下之前生成的旧 packet 目录自动收进各自的 `previous_packets/时间戳/` 归档目录，避免扩展目录越来越乱。
+
+也可以指定某次日报 JSON：
+
+```bash
+./run_focus_transfer_extension.sh \
+  --digest-json data/arxiv_digest_2026-04-10.json
+```
+
+如果你只想验证扩展的文件链路和 HTML，不调用模型：
+
+```bash
+FOCUS_TRANSFER_ANALYSIS_BACKEND=none \
+./run_focus_transfer_extension.sh \
+  --digest-json data/arxiv_digest_2026-04-10.json
+```
+
+兼容入口仍然保留：
 
 ```bash
 ./run_research_workbench.sh
-```
-
-常见用法：
-
-```bash
-./run_research_workbench.sh --tta-days 90 --cv-recent-days 2
-./run_research_workbench.sh --tta-days 60 --cv-recent-days 1 --output-suffix quick_scan
-./run_research_workbench.sh --tta-days 90 --cv-recent-days 2 --translate-backend google
-./run_research_workbench.sh --tta-days 90 --cv-recent-days 2 --tta-threshold 7
-```
-
-这个模块会复用现有 arXiv 抓取能力，但输出到独立目录，不会覆盖日报 HTML / JSON：
-
-- 默认 `RESEARCH_TTA_THRESHOLD=7`，会比更宽松的阈值更少混入边界论文；如果你想把 `source-free UDA` 之类相邻方向也尽量收入，可以手动降到 `6`
-
-- `reports/research_workbench/<packet>/quickstart.md`
-- `reports/research_workbench/<packet>/project_instructions.md`
-- `reports/research_workbench/<packet>/prompt_tta_landscape.md`
-- `reports/research_workbench/<packet>/prompt_cross_ideation.md`
-- `reports/research_workbench/<packet>/tta_corpus.md`
-- `reports/research_workbench/<packet>/cv_recent_corpus.md`
-- `reports/research_workbench/<packet>/tta_landscape_brief.md`
-- `reports/research_workbench/<packet>/cross_ideation_seeds.md`
-- `data/research_workbench/<packet>/tta_papers.json`
-- `data/research_workbench/<packet>/tta_papers.csv`
-- `data/research_workbench/<packet>/cv_recent_papers.json`
-- `data/research_workbench/<packet>/cv_recent_papers.csv`
-- `data/research_workbench/<packet>/packet_manifest.json`
-
-## 不用 API，如何配合 ChatGPT 使用
-
-这个项目现在采用的是“本地自动准备语料 + ChatGPT 做分析”的工作流：
-
-1. 本地脚本自动完成：
-   - 抓取 TTA 语料
-   - 抓取近 1-2 天 CV 语料
-   - 做启发式标签、假设信号、方法路线、脆弱点整理
-   - 自动生成 ChatGPT Project Instructions 和两套提示词
-2. 你在 ChatGPT 网页版或桌面版里手动完成最后一步：
-   - 新建一个 Project
-   - 把 `project_instructions.md` 内容贴到 Project Instructions
-   - 上传 `tta_corpus.md`、`tta_landscape_brief.md`、`cv_recent_corpus.md`、`cross_ideation_seeds.md`
-   - 先贴 `prompt_tta_landscape.md`
-   - 再贴 `prompt_cross_ideation.md`
-
-推荐直接先看：
-
-- `reports/research_workbench/<packet>/quickstart.md`
-
-这样做的好处是：
-
-- 不需要 OpenAI API Key
-- 不占你这套抓取系统的 API 预算
-- 现有日报系统和研究工作台彼此隔离
-- 生成的语料包、提示词、分析结果都可以版本化保存
-
-## 本地大模型全自动模式
-
-如果你已经有一个本地 OpenAI-compatible 服务，例如：
-
-```bash
-LOCAL_LLM_API_BASE="http://localhost:8080"
-```
-
-可以直接运行全自动链路：
-
-```bash
 ./run_research_autopilot.sh
+./run_research_kimi_autopilot.sh
 ```
 
-如果你只想复用已有 packet 做本地模型推理，不想重新抓取：
+它们现在都会跳转到同一个 Focus Transfer 扩展脚本。
+
+### OpenRouter / Kimi 分析配置
+
+Focus Transfer 的可迁移性分析默认使用 OpenRouter 的 Elephant 模型；Kimi 仍作为兼容后备。推荐直接在 `.env.digest` 中配置，这也是主日报和 Focus Transfer 扩展共用的默认配置来源：
 
 ```bash
-RESEARCH_SKIP_FETCH=1 ./run_research_autopilot.sh
+OPENROUTER_API_KEY="sk-or-..."
+OPENROUTER_API_BASE="https://openrouter.ai/api/v1"
+OPENROUTER_MODEL="openrouter/elephant-alpha"
 ```
 
-如果你想明确指定复用哪一个历史 packet：
+如果想临时切回 Kimi，可以显式覆盖 `FOCUS_TRANSFER_*`：
 
 ```bash
-RESEARCH_SKIP_FETCH=1 \
-RESEARCH_REUSE_PACKET="2026-04-10_tta90d_cv2d" \
-./run_research_autopilot.sh
+KIMI_API_KEY="sk-..."
+KIMI_API_BASE="https://api.moonshot.cn/v1"
+KIMI_MODEL="moonshot-v1-32k"
 ```
 
-它会在完成抓取和语料整理后，继续自动做三件事：
+扩展现在会按下面的优先级读取：
 
-1. 用本地模型生成第一轮 `TTA landscape analysis`
-2. 用本地模型对第一轮结果做结构化审查，输出 JSON reviewer 意见
-3. 把 reviewer 意见回灌到第二轮 prompt，生成 refined 版本
+- `FOCUS_TRANSFER_API_KEY` -> `OPENROUTER_API_KEY` -> `OPENAI_API_KEY` -> `KIMI_API_KEY`
+- `FOCUS_TRANSFER_API_BASE` -> `OPENROUTER_API_BASE` -> `OPENAI_BASE_URL` -> `KIMI_API_BASE`
+- `FOCUS_TRANSFER_MODEL` -> `OPENROUTER_MODEL` -> `OPENAI_MODEL` -> `KIMI_MODEL`
 
-同样会自动生成 `cross-ideation` 的初稿、审查和 refined 版本。
-
-默认环境变量：
+所以正常情况下你只需要维护主分支那一处配置，不需要再单独给扩展配一套。注意：分析模型不再默认读取 `TRANSLATE_MODEL`，避免翻译模型配置把可迁移性分析误切回 Kimi。下面这些 `FOCUS_TRANSFER_*` 变量只是可选覆盖：
 
 ```bash
-LOCAL_LLM_API_BASE="http://localhost:8080"
-LOCAL_LLM_MODEL="auto"
-RESEARCH_ANALYSIS_BACKEND="local"
-RESEARCH_SKIP_FETCH="0"
-RESEARCH_REUSE_PACKET=""
-RESEARCH_ANALYSIS_MAX_TTA_RECORDS="80"
-RESEARCH_ANALYSIS_CV_HIGHLIGHT_LIMIT="40"
-RESEARCH_ANALYSIS_MAX_OUTPUT_TOKENS="2400"
-RESEARCH_ANALYSIS_REVIEW_OUTPUT_TOKENS="900"
+FOCUS_TRANSFER_API_BASE="https://openrouter.ai/api/v1"
+FOCUS_TRANSFER_API_KEY="sk-or-..."
+FOCUS_TRANSFER_MODEL="openrouter/elephant-alpha"
 ```
 
-如果 `/v1/models` 自动探测模型失败，你可以手动指定：
+可以用下面命令快速确认当前实际会走哪个分析接口；它只显示 key 是否已设置，不会打印 key 本体：
 
 ```bash
-LOCAL_LLM_MODEL="your-local-model-name"
-./run_research_autopilot.sh
+./run_focus_transfer_extension.sh --print-config
 ```
 
-自动分析产物会额外写到：
+### Focus 长期记忆
 
-- `reports/research_workbench/<packet>/auto_analysis/tta_landscape_analysis_round1.md`
-- `reports/research_workbench/<packet>/auto_analysis/tta_landscape_analysis_review.json`
-- `reports/research_workbench/<packet>/auto_analysis/tta_landscape_analysis_final.md`
-- `reports/research_workbench/<packet>/auto_analysis/cross_ideation_analysis_round1.md`
-- `reports/research_workbench/<packet>/auto_analysis/cross_ideation_analysis_review.json`
-- `reports/research_workbench/<packet>/auto_analysis/cross_ideation_analysis_final.md`
-- `reports/research_workbench/<packet>/auto_analysis/auto_analysis_summary.md`
-- `data/research_workbench/<packet>/auto_analysis_manifest.json`
+扩展会为每一个单独的 focus 词维护一份长期 Markdown 记忆，而不是按整组 focus 词维护。比如当前默认 focus 有八个词，就会在 `data/focus_memory/` 下维护八个稳定文件：
 
-本地模型接口默认按 OpenAI-compatible 方式访问：
+- `test-time-adaptation_<hash>.md`
+- `multimodal-object-tracking_<hash>.md`
+- `rgb-x-tracking_<hash>.md`
+- `rgb-d-tracking_<hash>.md`
+- `rgb-e-tracking_<hash>.md`
+- `rgb-t-tracking_<hash>.md`
+- `distribution-shift_<hash>.md`
+- `domain-shift_<hash>.md`
 
-- `GET /v1/models`
-- `POST /v1/chat/completions`
-- 若支持，也会优先尝试 `POST /v1/responses`
+只要规范化后的 focus 词相同，不同组合也会复用同一个文件。例如一次使用 `test-time adaptation, domain shift`，另一次使用 `test-time adaptation, rgb-t tracking`，都会读写同一份 `test-time adaptation` 记忆文件。
+
+每次启用分析时，当前配置的分析模型会先基于当前 focus 论文和已有记忆，重写整合该 focus 词的：
+
+- 任务定义
+- 技术路线汇总
+- 动机与启发
+- 发展趋势与热点问题
+
+然后这些 Markdown 记忆会作为后续 non-focus 论文可迁移性判断的参考上下文。默认目录可以用下面变量覆盖：
+
+```bash
+FOCUS_TRANSFER_MEMORY_DIR="data/focus_memory"
+FOCUS_TRANSFER_MEMORY_CONTEXT_CHARS=6000
+```
+
+### 扩展输出
+
+扩展自身产物输出到独立目录；分析完成后还会把可迁移标签、趋势热点和元数据回写到对应主日报 HTML / JSON：
+
+- `reports/focus_transfer/<packet>/focus_transfer_report.html`
+- `reports/focus_transfer/<packet>/focus_corpus.md`
+- `reports/focus_transfer/<packet>/non_focus_candidates.md`
+- `reports/focus_transfer/<packet>/focus_landscape_trends.md`
+- `reports/focus_transfer/<packet>/focus_memory_index.md`
+- `reports/focus_transfer/<packet>/paper_transfer_judgments.md`
+- `data/focus_memory/<focus-term>_<hash>.md`
+- `data/focus_transfer/<packet>/focus_papers.json`
+- `data/focus_transfer/<packet>/non_focus_papers.json`
+- `data/focus_transfer/<packet>/focus_landscape_trends.json`
+- `data/focus_transfer/<packet>/focus_memory_files.json`
+- `data/focus_transfer/<packet>/paper_transfer_judgments.json`
+- `data/focus_transfer/<packet>/transfer_graph.json`
+- `data/focus_transfer/<packet>/analysis_quality_gate.json`
+- `data/focus_transfer/<packet>/analysis_manifest.json`
+
+### 扩展最终会做什么
+
+1. 从主分支日报 JSON 中恢复当前真正的 focus 关键词与 focus 论文。
+2. 把日报里的全部论文按“focus / non-focus”重新划开，而不是写死某个 TTA 关键词。
+3. 用当前配置的分析模型分别总结每个 focus 词的发展趋势与热点问题。
+4. 维护每个 focus 词自己的长期 Markdown 记忆，并把它作为迁移判断参考。
+5. 对所有 non-focus 论文逐篇输出结构化判断：
+   - keep / maybe / reject
+   - source field
+   - reason short
+   - transfer note
+6. 把建议迁移和待验证结果回写进主日报知识图谱，并在图谱下方补充 focus 趋势与热点。
 
 ## 中文摘要与中文标题
 

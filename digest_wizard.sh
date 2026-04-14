@@ -35,6 +35,10 @@ arXiv 论文日报向导
   both      CV + AI 同时抓取
   tracking  CV 跟踪 / 测试时适应 / 域适应方向
   quick     小规模快速测试
+
+说明：
+  交互式运行时，执行前会额外询问是否启用 Focus Transfer 扩展。
+  该扩展默认启用；启用后会在日报生成完成后继续调用 Kimi 做 focus / non-focus 迁移分析。
 EOF
 }
 
@@ -224,6 +228,15 @@ prompt_ignore_fetched() {
   fi
 }
 
+prompt_focus_transfer_extension() {
+  echo
+  if yes_no "是否在日报生成后继续运行 Focus Transfer 应用扩展？" "y"; then
+    CMD+=("--with-focus-transfer")
+  else
+    CMD+=("--without-focus-transfer")
+  fi
+}
+
 build_preset_command() {
   local name="$1"
   CMD=("$RUNNER")
@@ -246,8 +259,8 @@ build_preset_command() {
       CMD+=(
         "--domain" "cv"
         "--categories" ""
-        "--focus-terms" ""
-        "--focus-terms-extra" "tracking,multiple object tracking,multimodal tracking,visual object tracking,test-time adaptation,domain adaptation,domain shift,distribution shift,prompt tuning,test-time update,online adaptation,multimodal fusion"
+        "--focus-terms" "test-time adaptation,multimodal object tracking,rgb-x tracking,rgb-d tracking,rgb-e tracking,rgb-t tracking,distribution shift,domain shift"
+        "--focus-terms-extra" ""
         "--focus-latest" "100"
         "--focus-recent-scan" "1600"
       )
@@ -277,6 +290,7 @@ build_preset_command() {
 run_default() {
   CMD=("$RUNNER")
   prompt_ignore_fetched
+  prompt_focus_transfer_extension
   prompt_report_suffix
   run_command "${CMD[@]}"
 }
@@ -300,6 +314,7 @@ choose_preset() {
     *) echo "[错误] 预设选择无效。" >&2; return 1 ;;
   esac
   build_preset_command "$PRESET"
+  prompt_focus_transfer_extension
   prompt_report_suffix
   if yes_no "现在运行这个预设吗？" "y"; then
     run_command "${CMD[@]}"
@@ -391,6 +406,7 @@ custom_run() {
     save_env_updates
   fi
 
+  prompt_focus_transfer_extension
   prompt_report_suffix
 
   show_command "${CMD[@]}"
@@ -407,16 +423,24 @@ preview_default() {
 }
 
 show_latest_report() {
-  local report="$ROOT_DIR/reports/arxiv_digest_latest.html"
+  local report=""
+  if [[ ! -d "$ROOT_DIR/reports" ]]; then
+    echo
+    echo "[提示] 还没有找到报告目录：$ROOT_DIR/reports"
+    return
+  fi
+  while IFS= read -r candidate; do
+    report="$candidate"
+  done < <(find "$ROOT_DIR/reports" -maxdepth 1 -type f -name 'arxiv_digest_????-??-??*.html' | sort)
   echo
-  if [[ -f "$report" ]]; then
-    echo "最新报告："
+  if [[ -n "$report" && -f "$report" ]]; then
+    echo "最近日期报告："
     echo "  $report"
     if yes_no "用系统浏览器打开它吗？" "n"; then
       open "$report"
     fi
   else
-    echo "[提示] 还没有找到最新报告：$report"
+    echo "[提示] 还没有找到带日期的日报 HTML。"
   fi
 }
 
@@ -428,7 +452,7 @@ interactive_menu() {
     echo "2) 选择一个预设"
     echo "3) 自定义本次运行"
     echo "4) 预览默认命令"
-    echo "5) 查看/打开最新报告"
+    echo "5) 查看/打开最近日期报告"
     echo "0) 退出"
     read -r -p "请选择 [0-5]: " choice
     case "$choice" in

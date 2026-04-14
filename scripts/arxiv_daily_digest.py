@@ -32,7 +32,7 @@ DEFAULT_API_BASE = "https://api.openai.com/v1"
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 DEFAULT_CATEGORIES = ["cs.CV", "cs.AI"]
 TRANSLATION_CACHE_VERSION = "summary-v6"
-FETCH_STATE_VERSION = "1"
+FETCH_STATE_VERSION = "2"
 
 TOP_VENUES = [
     "CVPR", "ICCV", "ECCV", "NeurIPS", "ICLR", "AAAI", "IJCAI", "ICML", "KDD", "ACL", "EMNLP", "NAACL",
@@ -82,59 +82,29 @@ SIGNAL_ALIAS_PATTERNS = [
 ]
 
 DEFAULT_FOCUS_TERMS = [
-    "tracking",
-    "multi-object tracking",
-    "multimodal tracking",
-    "multimodal fusion",
     "test-time adaptation",
-    "test-time training",
-    "test-time update",
-    "domain adaptation",
-    "domain shift",
+    "multimodal object tracking",
+    "rgb-x tracking",
+    "rgb-d tracking",
+    "rgb-e tracking",
+    "rgb-t tracking",
     "distribution shift",
-    "covariate shift",
-    "online adaptation",
-    "prompt tuning",
-    "prompt optimization",
-    "prompt learning",
-    "visual prompt tuning",
-    "context optimization",
-    "test-time calibration",
-    "unsupervised domain adaptation",
-    "open-vocabulary tracking",
+    "domain shift",
 ]
 
 DEFAULT_FOCUS_MATCHERS = [
-    r"\btracking\b",
-    r"\btracker\b",
-    r"\bmot\b",
-    r"multi[- ]object tracking",
-    r"multi[- ]target tracking",
-    r"multimodal tracking",
-    r"cross[- ]modal tracking",
-    r"multimodal fusion",
-    r"cross[- ]modal fusion",
+    r"multimodal object tracking",
+    r"multi[- ]modal object tracking",
+    r"\brgb[- ]x tracking\b",
+    r"\brgb[- ]d tracking\b",
+    r"\brgb[- ]e tracking\b",
+    r"\brgb[- ]t tracking\b",
     r"\btest[- ]time adaptation\b",
     r"\btest[- ]time training\b",
     r"\btest[- ]time update\b",
     r"\btta\b",
-    r"\bttt\b",
-    r"\bdomain adaptation\b",
     r"\bdomain shift\b",
     r"\bdistribution shift\b",
-    r"\bcovariate shift\b",
-    r"\bdomain generalization\b",
-    r"\bonline adaptation\b",
-    r"\bcontinual adaptation\b",
-    r"\bprompt tuning\b",
-    r"\bprompt optimization\b",
-    r"\bprompt[- ]based\b",
-    r"\bprompt learning\b",
-    r"\bvisual prompt tuning\b",
-    r"\bcontext optimization\b",
-    r"\btest[- ]time calibration\b",
-    r"\bunsupervised domain adaptation\b",
-    r"\bopen[- ]vocabulary tracking\b",
 ]
 
 ACTIVE_FOCUS_TERMS = DEFAULT_FOCUS_TERMS[:]
@@ -142,9 +112,11 @@ ACTIVE_FOCUS_MATCHERS = DEFAULT_FOCUS_MATCHERS[:]
 ACTIVE_TRANSLATION_CACHE_SALT = "default"
 
 FOCUS_TERM_ALIASES = {
-    "tracking": ["tracker"],
-    "multi-object tracking": ["multiple object tracking", "multi-target tracking", "mot"],
-    "multimodal tracking": ["cross-modal tracking", "cross modal tracking"],
+    "multimodal object tracking": ["multimodal tracking", "multi-modal object tracking", "multi modal object tracking", "cross-modal tracking", "cross modal tracking"],
+    "rgb-x tracking": ["rgbx tracking", "rgb-x object tracking", "rgb x tracking"],
+    "rgb-d tracking": ["rgbd tracking", "rgb-d object tracking", "rgb d tracking", "rgb-depth tracking"],
+    "rgb-e tracking": ["rgbe tracking", "rgb-e object tracking", "rgb e tracking", "rgb-event tracking"],
+    "rgb-t tracking": ["rgbt tracking", "rgb-t object tracking", "rgb t tracking", "rgb-thermal tracking"],
     "multimodal fusion": ["cross-modal fusion", "cross modal fusion"],
     "test-time adaptation": ["tta"],
     "test-time training": ["ttt"],
@@ -206,6 +178,12 @@ class Paper:
     keywords: List[str] = field(default_factory=list)
     accepted_venue: str = ""
     accepted_hint: str = ""
+    source_platform: str = "arXiv"
+    source_venue: str = ""
+    full_text_status: str = ""
+    full_text_url: str = ""
+    source_date_precision: str = ""
+    source_year: str = ""
 
 
 def safe_text(s: str) -> str:
@@ -241,7 +219,60 @@ def normalize_venue_name(text: str) -> str:
 def parse_csv_terms(text: str) -> List[str]:
     if not text:
         return []
-    return [safe_text(x).lower() for x in text.split(",") if safe_text(x)]
+    return normalize_focus_terms([x for x in text.split(",") if safe_text(x)])
+
+
+def normalize_focus_term(term: str) -> str:
+    clean = safe_text(term).lower()
+    if not clean:
+        return ""
+    clean = clean.replace("_", " ")
+    clean = clean.replace("/", " ")
+    clean = re.sub(r"\s+", " ", clean)
+    return {
+        "test time adaptation": "test-time adaptation",
+        "test-time adaptation": "test-time adaptation",
+        "multimodal object tracking": "multimodal object tracking",
+        "multi modal object tracking": "multimodal object tracking",
+        "multi-modal object tracking": "multimodal object tracking",
+        "multimodal tracking": "multimodal object tracking",
+        "multi modal tracking": "multimodal object tracking",
+        "multi-modal tracking": "multimodal object tracking",
+        "rgb x tracking": "rgb-x tracking",
+        "rgb-x tracking": "rgb-x tracking",
+        "rgb x object tracking": "rgb-x tracking",
+        "rgb-x object tracking": "rgb-x tracking",
+        "rgbx tracking": "rgb-x tracking",
+        "rgb d tracking": "rgb-d tracking",
+        "rgb-d tracking": "rgb-d tracking",
+        "rgb d object tracking": "rgb-d tracking",
+        "rgb-d object tracking": "rgb-d tracking",
+        "rgbd tracking": "rgb-d tracking",
+        "rgb e tracking": "rgb-e tracking",
+        "rgb-e tracking": "rgb-e tracking",
+        "rgb e object tracking": "rgb-e tracking",
+        "rgb-e object tracking": "rgb-e tracking",
+        "rgbe tracking": "rgb-e tracking",
+        "rgb t tracking": "rgb-t tracking",
+        "rgb-t tracking": "rgb-t tracking",
+        "rgb t object tracking": "rgb-t tracking",
+        "rgb-t object tracking": "rgb-t tracking",
+        "rgbt tracking": "rgb-t tracking",
+        "distribution shift": "distribution shift",
+        "domain shift": "domain shift",
+    }.get(clean, clean)
+
+
+def normalize_focus_terms(terms: Iterable[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        canonical = normalize_focus_term(term)
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+    return normalized
 
 
 @lru_cache(maxsize=512)
@@ -274,7 +305,7 @@ def wildcard_focus_pattern(term: str) -> str:
 
 
 def focus_term_variants(term: str) -> List[str]:
-    canonical = safe_text(term).lower()
+    canonical = normalize_focus_term(term)
     if not canonical:
         return []
     variants = [canonical]
@@ -290,17 +321,6 @@ def configure_focus_terms(domain: str, override_terms: str, extra_terms: str) ->
         terms = parse_csv_terms(override_terms)
     else:
         terms = DEFAULT_FOCUS_TERMS[:]
-        if domain.lower() == "ai":
-            terms.extend([
-                "agent",
-                "agents",
-                "reasoning",
-                "post-training",
-                "alignment",
-                "retrieval augmented generation",
-                "tool use",
-                "multimodal large language model",
-            ])
     for term in parse_csv_terms(extra_terms):
         if term not in terms:
             terms.append(term)
@@ -336,10 +356,12 @@ def curl_fetch_url(url: str, user_agent: str, timeout: int) -> str:
         user_agent,
         url,
     ]
-    result = subprocess.run(curl_cmd, capture_output=True, text=True, check=False, timeout=timeout + 2)
-    if result.returncode == 0 and result.stdout:
-        return result.stdout
-    raise RuntimeError(result.stderr.strip() or f"curl failed for {url}")
+    result = subprocess.run(curl_cmd, capture_output=True, check=False, timeout=timeout + 2)
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    if result.returncode == 0 and stdout:
+        return stdout
+    raise RuntimeError(stderr.strip() or f"curl failed for {url}")
 
 
 def request_url(url: str, timeout: int = 20, retries: int = 2, allow_partial: bool = True) -> str:
@@ -447,6 +469,227 @@ def http_post_json_detailed(url: str, api_key: str, payload: dict, timeout: int 
         return None, safe_text(str(exc))
 
 
+def normalize_openai_endpoint_mode(endpoint_mode: str = "auto") -> str:
+    raw = safe_text(endpoint_mode or os.environ.get("LOCAL_LLM_ENDPOINT", "auto")).lower()
+    aliases = {
+        "": "auto",
+        "completion": "completions",
+        "text": "completions",
+        "legacy": "completions",
+        "chat_completion": "chat",
+        "chat-completions": "chat",
+        "chat_completions": "chat",
+        "response": "responses",
+    }
+    raw = aliases.get(raw, raw)
+    if raw not in {"auto", "responses", "chat", "completions"}:
+        return "auto"
+    return raw
+
+
+def normalize_openai_message_style(message_style: str = "normal") -> str:
+    raw = safe_text(message_style or os.environ.get("LOCAL_LLM_MESSAGE_STYLE", "normal")).lower()
+    aliases = {
+        "": "normal",
+        "single": "user_only",
+        "single_user": "user_only",
+        "user-only": "user_only",
+        "merged": "user_only",
+        "merge_system": "user_only",
+        "standard": "normal",
+    }
+    raw = aliases.get(raw, raw)
+    if raw not in {"normal", "user_only"}:
+        return "normal"
+    return raw
+
+
+def truthy_env(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = safe_text(str(value or "")).lower()
+    return raw in {"1", "true", "yes", "on", "y"}
+
+
+def build_openai_chat_messages(system_prompt: str, user_prompt: str, message_style: str = "normal") -> List[dict]:
+    style = normalize_openai_message_style(message_style)
+    system = safe_text(system_prompt)
+    user = safe_text(user_prompt)
+    if style == "user_only":
+        merged = (
+            "系统要求：\n"
+            f"{system or '你是一个严谨的中文研究分析助手。'}\n\n"
+            "用户任务与语料：\n"
+            f"{user}"
+        )
+        return [{"role": "user", "content": merged}]
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+def extract_openai_content_candidate(candidate: object) -> str:
+    if isinstance(candidate, list):
+        chunks: List[str] = []
+        for item in candidate:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and item.get("text"):
+                chunks.append(str(item["text"]))
+        candidate = " ".join(chunks)
+    return safe_text(str(candidate or ""))
+
+
+def is_unusable_llm_text(text: str) -> bool:
+    clean = safe_text(text)
+    if not clean:
+        return True
+    lowered = clean.lower()
+    failure_markers = (
+        "generation failed:",
+        "backend unavailable",
+        "socket hang up",
+        "nonetype object is not subscriptable",
+        "incompatible function arguments",
+    )
+    if any(marker in lowered for marker in failure_markers):
+        return True
+    if len(re.findall(r"<\|[^|]{1,80}\|>", clean)) >= 3:
+        return True
+    compact = re.sub(r"\s+", "", clean)
+    if len(compact) >= 80:
+        chars = [ch for ch in compact if not ch.isspace()]
+        unique_chars = set(chars)
+        if len(unique_chars) <= 8:
+            return True
+        pieces = re.findall(r"[\w\u4e00-\u9fff]+|[^\s\w]", clean)
+        if len(pieces) >= 30:
+            counts: Dict[str, int] = {}
+            for piece in pieces:
+                counts[piece] = counts.get(piece, 0) + 1
+            if max(counts.values()) / max(1, len(pieces)) >= 0.45:
+                return True
+    return False
+
+
+def extract_text_from_openai_stream(body: str) -> Tuple[str, str]:
+    content_chunks: List[str] = []
+    reasoning_chunks: List[str] = []
+    errors: List[str] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(":") or not line.startswith("data:"):
+            continue
+        data_text = line[len("data:") :].strip()
+        if not data_text or data_text == "[DONE]":
+            continue
+        try:
+            event = json.loads(data_text)
+        except Exception:
+            continue
+        if isinstance(event.get("error"), dict):
+            errors.append(safe_text(str(event["error"])))
+            continue
+        choices = event.get("choices", [])
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta", {})
+            message = choice.get("message", {})
+            content_candidates: List[object] = [choice.get("text")]
+            reasoning_candidates: List[object] = []
+            if isinstance(delta, dict):
+                content_candidates.append(delta.get("content"))
+                reasoning_candidates.append(delta.get("reasoning_content"))
+            if isinstance(message, dict):
+                content_candidates.append(message.get("content"))
+                reasoning_candidates.append(message.get("reasoning_content"))
+            for candidate in content_candidates:
+                content = extract_openai_content_candidate(candidate)
+                if content:
+                    content_chunks.append(content)
+                    break
+            for candidate in reasoning_candidates:
+                reasoning = extract_openai_content_candidate(candidate)
+                if reasoning:
+                    reasoning_chunks.append(reasoning)
+                    break
+    if content_chunks:
+        return safe_text("".join(content_chunks)), "\n".join(errors)
+    if reasoning_chunks:
+        errors.append("stream returned reasoning_content but no final content")
+    return "", "\n".join(errors)
+
+
+def http_post_openai_chat_detailed(
+    url: str,
+    api_key: str,
+    payload: dict,
+    timeout: int = 60,
+) -> Tuple[Optional[dict], Optional[str], str]:
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content_type = safe_text(resp.headers.get("Content-Type", "") if hasattr(resp, "headers") else "")
+            try:
+                body = resp.read().decode("utf-8", errors="replace")
+            except http.client.IncompleteRead as exc:
+                partial = exc.partial or b""
+                body = partial.decode("utf-8", errors="replace")
+                if payload.get("stream") or "text/event-stream" in content_type or body.lstrip().startswith("data:"):
+                    text, stream_err = extract_text_from_openai_stream(body)
+                    err = "IncompleteRead"
+                    if stream_err:
+                        err = f"{err}: {stream_err}"
+                    return None, text, err
+                return None, None, f"IncompleteRead({len(partial)} bytes read)"
+            if payload.get("stream") or "text/event-stream" in content_type or body.lstrip().startswith("data:"):
+                text, stream_err = extract_text_from_openai_stream(body)
+                return None, text, stream_err
+            return json.loads(body), None, ""
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        detail = safe_text(body) or safe_text(str(exc))
+        return None, None, f"HTTP {exc.code}: {detail}"
+    except Exception as exc:
+        return None, None, safe_text(str(exc))
+
+
+def extract_json_object_from_text(text: str) -> Optional[dict]:
+    content = safe_text(text)
+    if not content:
+        return None
+    try:
+        parsed = json.loads(content)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", content, flags=re.S)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def call_openai_json(
     model: str,
     api_key: str,
@@ -455,11 +698,15 @@ def call_openai_json(
     user_prompt: str,
     timeout: int = 60,
     max_output_tokens: int = 160,
+    endpoint_mode: str = "auto",
+    message_style: str = "normal",
+    stream: bool = False,
 ) -> Optional[dict]:
     base = normalize_api_base(api_base)
+    mode = normalize_openai_endpoint_mode(endpoint_mode)
     prefer_chat_only = ("moonshot" in base.lower()) or ("kimi" in base.lower())
 
-    if not prefer_chat_only:
+    if mode in {"auto", "responses"} and not prefer_chat_only:
         # Try OpenAI Responses API first.
         response_payload = {
             "model": model,
@@ -492,41 +739,61 @@ def call_openai_json(
                                 chunks.append(txt)
             merged = safe_text(" ".join(chunks))
             if merged:
-                try:
-                    return json.loads(merged)
-                except Exception:
-                    return None
+                return extract_json_object_from_text(merged)
 
-    # Fallback for OpenAI-compatible providers (e.g., Kimi/Moonshot).
-    chat_payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.2,
-        "max_tokens": max_output_tokens,
-    }
-    chat_data = http_post_json(f"{base}/chat/completions", api_key=api_key, payload=chat_payload, timeout=timeout)
-    if not chat_data:
-        return None
-    try:
-        content = chat_data["choices"][0]["message"]["content"]
-    except Exception:
-        return None
-    if not isinstance(content, str) or not content.strip():
-        return None
-    try:
-        return json.loads(content)
-    except Exception:
-        m = re.search(r"\{.*\}", content, flags=re.S)
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
+    if mode in {"auto", "chat"}:
+        # Fallback for OpenAI-compatible providers (e.g., Kimi/Moonshot).
+        chat_payload = {
+            "model": model,
+            "messages": build_openai_chat_messages(system_prompt, user_prompt, message_style),
+            "response_format": {"type": "json_object"},
+            "temperature": 0.2,
+            "max_tokens": max_output_tokens,
+        }
+        if stream:
+            chat_payload.pop("response_format", None)
+            chat_payload["stream"] = True
+        chat_data, streamed_text, _err = http_post_openai_chat_detailed(
+            f"{base}/chat/completions",
+            api_key=api_key,
+            payload=chat_payload,
+            timeout=timeout,
+        )
+        if streamed_text:
+            parsed = extract_json_object_from_text(streamed_text)
+            if parsed is not None:
+                return parsed
+        if chat_data:
+            try:
+                content = chat_data["choices"][0]["message"]["content"]
+            except Exception:
+                content = ""
+            parsed = extract_json_object_from_text(str(content or ""))
+            if parsed is not None:
+                return parsed
+
+    if mode in {"auto", "completions"}:
+        completion_payload = {
+            "model": model,
+            "prompt": (
+                f"System:\n{system_prompt}\n\n"
+                f"User:\n{user_prompt}\n\n"
+                "Assistant JSON:\n"
+            ),
+            "temperature": 0.2,
+            "max_tokens": max_output_tokens,
+        }
+        completion_data = http_post_json(f"{base}/completions", api_key=api_key, payload=completion_payload, timeout=timeout)
+        if completion_data:
+            try:
+                content = completion_data["choices"][0].get("text", "")
+            except Exception:
+                content = ""
+            parsed = extract_json_object_from_text(str(content or ""))
+            if parsed is not None:
+                return parsed
+
+    return None
 
 
 def call_openai_text(
@@ -538,11 +805,15 @@ def call_openai_text(
     timeout: int = 60,
     max_output_tokens: int = 1200,
     temperature: float = 0.2,
+    endpoint_mode: str = "auto",
+    message_style: str = "normal",
+    stream: bool = False,
 ) -> Optional[str]:
     base = normalize_api_base(api_base)
+    mode = normalize_openai_endpoint_mode(endpoint_mode)
     prefer_chat_only = ("moonshot" in base.lower()) or ("kimi" in base.lower())
 
-    if not prefer_chat_only:
+    if mode in {"auto", "responses"} and not prefer_chat_only:
         response_payload = {
             "model": model,
             "input": [
@@ -571,32 +842,50 @@ def call_openai_text(
             if merged:
                 return merged
 
-    chat_payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_output_tokens,
-    }
-    chat_data = http_post_json(f"{base}/chat/completions", api_key=api_key, payload=chat_payload, timeout=timeout)
-    if not chat_data:
-        return None
-    try:
-        content = chat_data["choices"][0]["message"]["content"]
-    except Exception:
-        return None
-    if isinstance(content, list):
-        chunks: List[str] = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "text" and item.get("text"):
-                chunks.append(str(item["text"]))
-        content = " ".join(chunks)
-    content = safe_text(str(content))
-    return content or None
+    if mode in {"auto", "chat"}:
+        chat_payload = {
+            "model": model,
+            "messages": build_openai_chat_messages(system_prompt, user_prompt, message_style),
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        if stream:
+            chat_payload["stream"] = True
+        chat_data, streamed_text, _err = http_post_openai_chat_detailed(
+            f"{base}/chat/completions",
+            api_key=api_key,
+            payload=chat_payload,
+            timeout=timeout,
+        )
+        if streamed_text and not is_unusable_llm_text(streamed_text):
+            return streamed_text
+        if chat_data:
+            try:
+                content = chat_data["choices"][0]["message"]["content"]
+            except Exception:
+                content = ""
+            content = extract_openai_content_candidate(content)
+            if content and not is_unusable_llm_text(content):
+                return content
+
+    if mode in {"auto", "completions"}:
+        completion_payload = {
+            "model": model,
+            "prompt": f"System:\n{system_prompt}\n\nUser:\n{user_prompt}\n\nAssistant:\n",
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        completion_data = http_post_json(f"{base}/completions", api_key=api_key, payload=completion_payload, timeout=timeout)
+        if completion_data:
+            try:
+                content = completion_data["choices"][0].get("text", "")
+            except Exception:
+                content = ""
+            content = safe_text(str(content))
+            if content and not is_unusable_llm_text(content):
+                return content
+
+    return None
 
 
 def call_openai_text_detailed(
@@ -608,8 +897,12 @@ def call_openai_text_detailed(
     timeout: int = 60,
     max_output_tokens: int = 1200,
     temperature: float = 0.2,
+    endpoint_mode: str = "auto",
+    message_style: str = "normal",
+    stream: bool = False,
 ) -> Tuple[Optional[str], str]:
     base = normalize_api_base(api_base)
+    mode = normalize_openai_endpoint_mode(endpoint_mode)
     prefer_chat_only = ("moonshot" in base.lower()) or ("kimi" in base.lower())
     debug_lines: List[str] = []
 
@@ -629,20 +922,12 @@ def call_openai_text_detailed(
             if isinstance(delta, dict):
                 candidates.append(delta.get("content"))
         for candidate in candidates:
-            if isinstance(candidate, list):
-                chunks: List[str] = []
-                for item in candidate:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("type") == "text" and item.get("text"):
-                        chunks.append(str(item["text"]))
-                candidate = " ".join(chunks)
-            clean = safe_text(str(candidate or ""))
+            clean = extract_openai_content_candidate(candidate)
             if clean:
                 return clean
         return None
 
-    if not prefer_chat_only:
+    if mode in {"auto", "responses"} and not prefer_chat_only:
         response_payload = {
             "model": model,
             "input": [
@@ -676,45 +961,60 @@ def call_openai_text_detailed(
                 return merged, "\n".join(debug_lines)
             debug_lines.append("/responses returned no usable text")
 
-    chat_payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": temperature,
-        "max_tokens": max_output_tokens,
-    }
-    chat_data, err = http_post_json_detailed(f"{base}/chat/completions", api_key=api_key, payload=chat_payload, timeout=timeout)
-    if err:
-        debug_lines.append(f"/chat/completions error: {err}")
-    if chat_data:
-        if isinstance(chat_data.get("error"), dict):
-            debug_lines.append(f"/chat/completions api_error: {safe_text(str(chat_data['error']))}")
-        content = extract_content_from_chat_payload(chat_data)
-        if content:
-            return content, "\n".join(debug_lines)
-        debug_lines.append("/chat/completions returned no usable text")
+    if mode in {"auto", "chat"}:
+        chat_payload = {
+            "model": model,
+            "messages": build_openai_chat_messages(system_prompt, user_prompt, message_style),
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        if stream:
+            chat_payload["stream"] = True
+        chat_data, streamed_text, err = http_post_openai_chat_detailed(
+            f"{base}/chat/completions",
+            api_key=api_key,
+            payload=chat_payload,
+            timeout=timeout,
+        )
+        if err:
+            debug_lines.append(f"/chat/completions error: {err}")
+        if streamed_text:
+            if is_unusable_llm_text(streamed_text):
+                debug_lines.append("/chat/completions streamed unusable text")
+            else:
+                return streamed_text, "\n".join(debug_lines)
+        if chat_data:
+            if isinstance(chat_data.get("error"), dict):
+                debug_lines.append(f"/chat/completions api_error: {safe_text(str(chat_data['error']))}")
+            content = extract_content_from_chat_payload(chat_data)
+            if content and not is_unusable_llm_text(content):
+                return content, "\n".join(debug_lines)
+            if content:
+                debug_lines.append("/chat/completions returned unusable text")
+            debug_lines.append("/chat/completions returned no usable text")
 
-    completion_payload = {
-        "model": model,
-        "prompt": f"System:\n{system_prompt}\n\nUser:\n{user_prompt}\n\nAssistant:\n",
-        "temperature": temperature,
-        "max_tokens": max_output_tokens,
-    }
-    completion_data, err = http_post_json_detailed(f"{base}/completions", api_key=api_key, payload=completion_payload, timeout=timeout)
-    if err:
-        debug_lines.append(f"/completions error: {err}")
-    if completion_data:
-        if isinstance(completion_data.get("error"), dict):
-            debug_lines.append(f"/completions api_error: {safe_text(str(completion_data['error']))}")
-        try:
-            text = safe_text(str(completion_data["choices"][0].get("text", "")))
-        except Exception:
-            text = ""
-        if text:
-            return text, "\n".join(debug_lines)
-        debug_lines.append("/completions returned no usable text")
+    if mode in {"auto", "completions"}:
+        completion_payload = {
+            "model": model,
+            "prompt": f"System:\n{system_prompt}\n\nUser:\n{user_prompt}\n\nAssistant:\n",
+            "temperature": temperature,
+            "max_tokens": max_output_tokens,
+        }
+        completion_data, err = http_post_json_detailed(f"{base}/completions", api_key=api_key, payload=completion_payload, timeout=timeout)
+        if err:
+            debug_lines.append(f"/completions error: {err}")
+        if completion_data:
+            if isinstance(completion_data.get("error"), dict):
+                debug_lines.append(f"/completions api_error: {safe_text(str(completion_data['error']))}")
+            try:
+                text = safe_text(str(completion_data["choices"][0].get("text", "")))
+            except Exception:
+                text = ""
+            if text and not is_unusable_llm_text(text):
+                return text, "\n".join(debug_lines)
+            if text:
+                debug_lines.append("/completions returned unusable text")
+            debug_lines.append("/completions returned no usable text")
 
     return None, "\n".join(debug_lines)
 
@@ -1079,10 +1379,11 @@ def google_translate_text(text: str, timeout: int = 12, retries: int = 2) -> str
     return ""
 
 
-def google_translate_texts(texts: List[str], timeout: int = 12, max_chars: int = 3000) -> List[str]:
+def google_translate_texts(texts: List[str], timeout: int = 12, max_chars: int = 3000, progress_label: str = "") -> List[str]:
     out = [""] * len(texts)
     batch: List[Tuple[int, str]] = []
     batch_chars = 0
+    batches: List[List[Tuple[int, str]]] = []
 
     def flush(items: List[Tuple[int, str]]) -> None:
         if not items:
@@ -1112,12 +1413,19 @@ def google_translate_texts(texts: List[str], timeout: int = 12, max_chars: int =
             continue
         marker_len = len(f"[[[SEG{idx}]]] ")
         if batch and batch_chars + len(clean) + marker_len > max_chars:
-            flush(batch)
+            batches.append(batch[:])
             batch = []
             batch_chars = 0
         batch.append((idx, clean))
         batch_chars += len(clean) + marker_len
-    flush(batch)
+    if batch:
+        batches.append(batch[:])
+    if progress_label and batches:
+        print(f"[INFO] {progress_label}: translating {len([text for text in texts if safe_text(text)])} texts in {len(batches)} batches")
+    for batch_index, items in enumerate(batches, start=1):
+        if progress_label:
+            print(f"[INFO] {progress_label}: batch {batch_index}/{len(batches)} ({len(items)} texts)")
+        flush(items)
     return out
 
 
@@ -1509,6 +1817,21 @@ KEYWORD_PHRASE_PREFIX_NOISE = {
 
 KEYWORD_PHRASE_ALIASES = {
     "multi object tracking": "multi-object tracking",
+    "multimodal tracking": "multimodal object tracking",
+    "multi modal tracking": "multimodal object tracking",
+    "multi modal object tracking": "multimodal object tracking",
+    "rgb x tracking": "rgb-x tracking",
+    "rgbx tracking": "rgb-x tracking",
+    "rgb x object tracking": "rgb-x tracking",
+    "rgb d tracking": "rgb-d tracking",
+    "rgbd tracking": "rgb-d tracking",
+    "rgb d object tracking": "rgb-d tracking",
+    "rgb e tracking": "rgb-e tracking",
+    "rgbe tracking": "rgb-e tracking",
+    "rgb e object tracking": "rgb-e tracking",
+    "rgb t tracking": "rgb-t tracking",
+    "rgbt tracking": "rgb-t tracking",
+    "rgb t object tracking": "rgb-t tracking",
     "test time adaptation": "test-time adaptation",
     "test time training": "test-time training",
     "test time update": "test-time update",
@@ -1555,7 +1878,7 @@ def format_keyword_label(keyword: str) -> str:
     upper_text = text.upper()
     if upper_text in CANONICAL_SIGNAL_LABELS:
         return upper_text
-    if upper_text in {"VLA", "VLM", "MOT", "TTA", "TTT", "RAG", "MRI", "CT", "RL", "COT", "DINO", "LLM", "MLLM", "CLIP", "SAM", "VQA", "UAV", "OOD", "ID", "OCR", "CNN", "GNN"}:
+    if upper_text in {"VLA", "VLM", "MOT", "TTA", "TTT", "RAG", "MRI", "CT", "RL", "COT", "DINO", "LLM", "MLLM", "CLIP", "SAM", "VQA", "UAV", "OOD", "ID", "OCR", "CNN", "GNN", "RGB"}:
         return upper_text
     if re.fullmatch(r"[A-Z0-9-]{2,12}", text):
         return text
@@ -1565,7 +1888,7 @@ def format_keyword_label(keyword: str) -> str:
             parts.append(word)
         elif "-" in word:
             hy = "-".join([
-                w.upper() if w.upper() in {"VLA", "VLM", "MOT", "TTA", "TTT", "RAG", "MRI", "CT", "RL", "COT", "DINO", "LLM", "MLLM", "CLIP", "SAM", "VQA", "UAV", "OOD", "ID", "OCR", "CNN", "GNN"} else w.capitalize()
+                w.upper() if w.upper() in {"VLA", "VLM", "MOT", "TTA", "TTT", "RAG", "MRI", "CT", "RL", "COT", "DINO", "LLM", "MLLM", "CLIP", "SAM", "VQA", "UAV", "OOD", "ID", "OCR", "CNN", "GNN", "RGB"} else w.capitalize()
                 for w in word.split("-")
             ])
             parts.append(hy)
@@ -1682,6 +2005,10 @@ def extract_keywords_from_paper(p: Paper, max_keywords: int = 8) -> List[str]:
             add(cat_kw, 3, source="category")
     if p.accepted_venue:
         add(normalize_venue_name(p.accepted_venue), 5, source="venue")
+    if p.source_platform and p.source_platform.lower() != "arxiv":
+        add(normalize_venue_name(p.source_platform), 3, source="source")
+    if p.source_venue:
+        add(normalize_venue_name(p.source_venue), 4, source="venue")
 
     if ":" in title_text:
         prefix, suffix = title_text.split(":", 1)
@@ -1780,6 +2107,10 @@ def collect_graph_theme_scores(p: Paper) -> Dict[str, int]:
             add(mapped, 3, source="category")
     if p.accepted_venue:
         add(normalize_venue_name(p.accepted_venue), 4, source="venue")
+    if p.source_platform and p.source_platform.lower() != "arxiv":
+        add(normalize_venue_name(p.source_platform), 3, source="source")
+    if p.source_venue:
+        add(normalize_venue_name(p.source_venue), 4, source="venue")
 
     title_hits: Dict[str, bool] = {}
     occurrence_counts: Dict[str, int] = {}
@@ -2466,7 +2797,11 @@ def extract_signal_group(p: Paper) -> str:
         normalized = normalize_venue_name(p.accepted_venue)
         if normalized and normalized not in {"IEEE", "ACM"}:
             return normalized
-    sources = [p.accepted_venue, p.accepted_hint, p.comment, p.journal_ref]
+    if p.source_venue:
+        normalized = normalize_venue_name(p.source_venue)
+        if normalized and normalized not in {"IEEE", "ACM"}:
+            return normalized
+    sources = [p.accepted_venue, p.source_venue, p.accepted_hint, p.comment, p.journal_ref]
     merged_text = safe_text(" ".join(sources)).lower()
     for pattern, label in SIGNAL_ALIAS_PATTERNS:
         if re.search(pattern, merged_text):
@@ -2491,14 +2826,74 @@ def extract_signal_group(p: Paper) -> str:
 
 
 def accepted_rank(p: Paper) -> int:
-    text = f"{p.accepted_venue} {p.accepted_hint} {p.comment} {p.journal_ref}".lower()
+    text = f"{p.accepted_venue} {p.accepted_hint} {p.source_venue} {p.comment} {p.journal_ref}".lower()
     if "accepted" in text or "accept" in text:
         return 3
     if "to appear" in text or "published" in text:
         return 2
     if p.accepted_venue:
+        if p.source_platform and p.source_platform != "arXiv":
+            return 2
+        return 1
+    if p.source_venue and (p.source_platform or "").lower() != "arxiv":
         return 1
     return 0
+
+
+def paper_signal_label(p: Paper) -> str:
+    label = safe_text(p.accepted_venue or p.source_venue)
+    if label:
+        return label
+    return extract_signal_group(p)
+
+
+def paper_primary_link_label(p: Paper) -> str:
+    platform = safe_text(p.source_platform).lower()
+    if platform and platform != "arxiv":
+        if "scholar" in platform:
+            return "Scholar详情"
+        if "venue" in platform or "official" in platform:
+            return "官网详情"
+        return "详情页"
+    return "arXiv"
+
+
+def paper_secondary_link_label(p: Paper) -> str:
+    platform = safe_text(p.source_platform).lower()
+    if platform and platform != "arxiv":
+        status = safe_text(p.full_text_status)
+        if "未发现" in status:
+            return "候选全文"
+        if p.link_pdf and re.search(r"\.pdf(\?|$)", p.link_pdf, flags=re.I):
+            return "PDF"
+        return "全文/出版页"
+    return "PDF"
+
+
+TRANSFER_NOTE_MARKER = "[[[TRANSFER_NOTE]]]"
+
+
+def split_transfer_summary(summary: str) -> Tuple[str, str]:
+    text = str(summary or "")
+    if TRANSFER_NOTE_MARKER not in text:
+        return safe_text(text), ""
+    summary_text, transfer_text = text.split(TRANSFER_NOTE_MARKER, 1)
+    return safe_text(summary_text), safe_text(transfer_text)
+
+
+def transfer_rank(p: Paper) -> int:
+    _summary_text, transfer_text = split_transfer_summary(p.summary_zh)
+    if not transfer_text:
+        return 0
+    if "建议优先借鉴" in transfer_text or "建议迁移" in transfer_text:
+        return 2
+    if "建议先验证" in transfer_text or "待验证" in transfer_text:
+        return 1
+    return 1
+
+
+def is_focus_paper(p: Paper) -> bool:
+    return bool([tag for tag in clean_tag_list(p.focus_tags) if tag != "other"]) or focus_score(p) > 0
 
 
 def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) -> str:
@@ -2525,7 +2920,10 @@ def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) 
         out.append("<thead><tr><th>#</th><th>论文</th><th>中文摘要</th><th>中稿线索</th><th>状态</th><th>链接</th></tr></thead><tbody>")
         for idx, p in enumerate(rows, start=1):
             hint = p.accepted_hint or p.comment or p.journal_ref or p.accepted_venue
-            status = "Accepted" if accepted_rank(p) >= 3 else "Mentioned"
+            status = "Accepted" if accepted_rank(p) >= 3 else ("Published" if p.source_platform and p.source_platform != "arXiv" else "Mentioned")
+            primary_label = paper_primary_link_label(p)
+            secondary_label = paper_secondary_link_label(p)
+            secondary_url = p.full_text_url or p.link_pdf or p.link_abs
             title_block = html.escape(p.title)
             if p.title_zh:
                 title_block += f"<div class='signal-title-zh'>{html.escape(p.title_zh)}</div>"
@@ -2536,8 +2934,8 @@ def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) 
             out.append(f"<td>{html.escape(safe_text(hint)[:160])}</td>")
             out.append(f"<td>{status}</td>")
             out.append(
-                f"<td><a href='{html.escape(p.link_abs)}' target='_blank'>arXiv</a> | "
-                f"<a href='{html.escape(p.link_pdf)}' target='_blank'>PDF</a></td>"
+                f"<td><a href='{html.escape(p.link_abs)}' target='_blank'>{html.escape(primary_label)}</a> | "
+                f"<a href='{html.escape(secondary_url)}' target='_blank'>{html.escape(secondary_label)}</a></td>"
             )
             out.append("</tr>")
         out.append("</tbody></table>")
@@ -2596,6 +2994,7 @@ def build_knowledge_graph_data(
                 "paper_ids": set(),
                 "focus_ids": set(),
                 "accepted_ids": set(),
+                "transfer_ids": set(),
                 "area_counts": {},
                 "latest_published": "",
             },
@@ -2619,9 +3018,9 @@ def build_knowledge_graph_data(
         paper_keywords[pid] = theme_keys
         paper_theme_scores[pid] = theme_scores
 
-        focus_tags = [tag for tag in clean_tag_list(p.focus_tags) if tag != "other"]
-        is_focus = bool(focus_tags) or focus_score(p) > 0
+        is_focus = is_focus_paper(p)
         is_signal = accepted_rank(p) > 0
+        is_transfer = transfer_rank(p) > 0
         for kw in set(theme_keys):
             meta = ensure_keyword_meta(kw)
             meta["paper_ids"].add(pid)
@@ -2629,6 +3028,8 @@ def build_knowledge_graph_data(
                 meta["focus_ids"].add(pid)
             if is_signal:
                 meta["accepted_ids"].add(pid)
+            if is_transfer:
+                meta["transfer_ids"].add(pid)
             area = p.major_area or "Other"
             area_counts = meta["area_counts"]
             area_counts[area] = area_counts.get(area, 0) + 1
@@ -2647,6 +3048,7 @@ def build_knowledge_graph_data(
         paper_count = len(meta["paper_ids"])
         focus_count = len(meta["focus_ids"])
         accepted_count = len(meta["accepted_ids"])
+        transfer_count = len(meta["transfer_ids"])
         relation_strength = sum(weight for (left, right), weight in cooccurrence.items() if keyword in (left, right))
         specificity_bonus = 4.0 if (" " in keyword or "-" in keyword or keyword in ACTIVE_FOCUS_TERMS) else 0.0
         venue_penalty = 16.0 if keyword.upper() in CANONICAL_SIGNAL_LABELS else 0.0
@@ -2654,6 +3056,7 @@ def build_knowledge_graph_data(
             (paper_count * 5.0)
             + (focus_count * 3.5)
             + (accepted_count * 2.5)
+            + (transfer_count * 3.0)
             + relation_strength
             + specificity_bonus
             - venue_penalty
@@ -2661,7 +3064,14 @@ def build_knowledge_graph_data(
 
     ranking = sorted(
         keyword_meta.items(),
-        key=lambda item: (theme_score(item[0]), len(item[1]["paper_ids"]), len(item[1]["accepted_ids"]), len(item[1]["focus_ids"]), len(item[0])),
+        key=lambda item: (
+            theme_score(item[0]),
+            len(item[1]["paper_ids"]),
+            len(item[1]["transfer_ids"]),
+            len(item[1]["accepted_ids"]),
+            len(item[1]["focus_ids"]),
+            len(item[0]),
+        ),
         reverse=True,
     )
     preferred_keywords = [keyword for keyword, meta in ranking if len(meta["paper_ids"]) >= 2 and is_graph_theme_candidate(keyword)]
@@ -2740,6 +3150,7 @@ def build_knowledge_graph_data(
                 "paper_count": len(keyword_meta[right]["paper_ids"]),
                 "focus_count": len(keyword_meta[right]["focus_ids"]),
                 "accepted_count": len(keyword_meta[right]["accepted_ids"]),
+                "transfer_count": len(keyword_meta[right]["transfer_ids"]),
             }
         )
         adjacency_rows[right].append(
@@ -2752,6 +3163,7 @@ def build_knowledge_graph_data(
                 "paper_count": len(keyword_meta[left]["paper_ids"]),
                 "focus_count": len(keyword_meta[left]["focus_ids"]),
                 "accepted_count": len(keyword_meta[left]["accepted_ids"]),
+                "transfer_count": len(keyword_meta[left]["transfer_ids"]),
             }
         )
     for keyword, rows in adjacency_rows.items():
@@ -2759,6 +3171,7 @@ def build_knowledge_graph_data(
             key=lambda item: (
                 item["shared"],
                 item["strength"],
+                item["transfer_count"],
                 item["accepted_count"],
                 item["focus_count"],
                 item["paper_count"],
@@ -2772,8 +3185,42 @@ def build_knowledge_graph_data(
             return [dict(row) for row in rows]
         return [dict(row) for row in rows[:limit]]
 
-    def paper_priority(p: Paper) -> Tuple[int, int, str]:
-        return (accepted_rank(p), focus_score(p), p.published)
+    def paper_sort_key(p: Paper, keyword: str = "") -> Tuple[int, int, int, int, str]:
+        pid = p.arxiv_id or p.link_abs
+        return (
+            transfer_rank(p),
+            accepted_rank(p),
+            focus_score(p),
+            paper_theme_scores.get(pid, {}).get(keyword, 0) if keyword else 0,
+            p.published,
+        )
+
+    def graph_paper_row(p: Paper, keyword: str = "") -> Dict[str, object]:
+        pid = p.arxiv_id or p.link_abs
+        summary_text, transfer_note = split_transfer_summary(p.summary_zh)
+        rank = transfer_rank(p)
+        return {
+            "id": pid,
+            "title": p.title,
+            "title_zh": p.title_zh,
+            "summary_zh": summary_text,
+            "transfer_note_zh": transfer_note,
+            "url": p.link_abs,
+            "accepted_venue": p.accepted_venue,
+            "accepted_signal": accepted_rank(p) > 0,
+            "accepted_label": paper_signal_label(p),
+            "source_platform": p.source_platform,
+            "source_venue": p.source_venue,
+            "full_text_status": p.full_text_status,
+            "full_text_url": p.full_text_url or p.link_pdf or p.link_abs,
+            "source_date_precision": p.source_date_precision,
+            "source_year": p.source_year,
+            "published": p.published,
+            "focus": is_focus_paper(p),
+            "transfer": rank > 0,
+            "transfer_rank": rank,
+            "match_score": paper_theme_scores.get(pid, {}).get(keyword, 0) if keyword else 0,
+        }
 
     themes: List[Dict[str, object]] = []
     for keyword in ordered_keywords:
@@ -2781,20 +3228,14 @@ def build_knowledge_graph_data(
         paper_ids = list(meta["paper_ids"])
         related_papers = sorted(
             [paper_lookup[pid] for pid in paper_ids if pid in paper_lookup],
-            key=lambda paper: (
-                paper_theme_scores.get(paper.arxiv_id or paper.link_abs, {}).get(keyword, 0),
-                accepted_rank(paper),
-                focus_score(paper),
-                paper.published,
-            ),
+            key=lambda paper: paper_sort_key(paper, keyword),
             reverse=True,
         )
-        focus_papers = [p for p in related_papers if focus_score(p) > 0][:4]
-        accepted_papers = [p for p in related_papers if accepted_rank(p) > 0][:4]
         area_counts = meta["area_counts"]
         sorted_areas = [k for k, _v in sorted(area_counts.items(), key=lambda item: item[1], reverse=True) if k]
         focus_count = len(meta["focus_ids"])
         accepted_count = len(meta["accepted_ids"])
+        transfer_count = len(meta["transfer_ids"])
         paper_count = len(meta["paper_ids"])
         if keyword in ACTIVE_FOCUS_TERMS or focus_count >= max(4, (paper_count + 1) // 2):
             theme_kind = "focus"
@@ -2813,6 +3254,7 @@ def build_knowledge_graph_data(
                 "paper_count": paper_count,
                 "focus_count": focus_count,
                 "accepted_count": accepted_count,
+                "transfer_count": transfer_count,
                 "theme_kind": theme_kind,
                 "latest_published": safe_text(meta["latest_published"]),
                 "areas": sorted_areas[:3],
@@ -2821,20 +3263,7 @@ def build_knowledge_graph_data(
                 "related_count": len(adjacency_rows.get(keyword, [])),
                 "related_keywords": relation_rows(keyword, max_related_keywords),
                 "graph_neighbors": relation_rows(keyword, 18),
-                "papers": [
-                    {
-                        "id": p.arxiv_id or p.link_abs,
-                        "title": p.title,
-                        "title_zh": p.title_zh,
-                        "summary_zh": p.summary_zh,
-                        "url": p.link_abs,
-                        "accepted_venue": p.accepted_venue,
-                        "published": p.published,
-                        "focus": focus_score(p) > 0,
-                        "match_score": paper_theme_scores.get(p.arxiv_id or p.link_abs, {}).get(keyword, 0),
-                    }
-                    for p in related_papers
-                ],
+                "papers": [graph_paper_row(p, keyword) for p in related_papers],
                 "accepted_papers": [
                     {
                         "id": p.arxiv_id or p.link_abs,
@@ -2842,6 +3271,8 @@ def build_knowledge_graph_data(
                         "title_zh": p.title_zh,
                         "url": p.link_abs,
                         "accepted_venue": p.accepted_venue,
+                        "accepted_label": paper_signal_label(p),
+                        "transfer": transfer_rank(p) > 0,
                     }
                     for p in [p for p in related_papers if accepted_rank(p) > 0]
                 ],
@@ -2851,8 +3282,19 @@ def build_knowledge_graph_data(
                         "title": p.title,
                         "title_zh": p.title_zh,
                         "url": p.link_abs,
+                        "transfer": transfer_rank(p) > 0,
                     }
-                    for p in [p for p in related_papers if focus_score(p) > 0]
+                    for p in [p for p in related_papers if is_focus_paper(p)]
+                ],
+                "transfer_papers": [
+                    {
+                        "id": p.arxiv_id or p.link_abs,
+                        "title": p.title,
+                        "title_zh": p.title_zh,
+                        "url": p.link_abs,
+                        "transfer_rank": transfer_rank(p),
+                    }
+                    for p in [p for p in related_papers if transfer_rank(p) > 0]
                 ],
             }
         )
@@ -2863,6 +3305,7 @@ def build_knowledge_graph_data(
             1 if not item.get("is_venue_theme") else 0,
             item["score"],
             item["paper_count"],
+            item["transfer_count"],
             item["accepted_count"],
             item["focus_count"],
         ),
@@ -2892,9 +3335,12 @@ def build_knowledge_graph_data(
                 "title": p.title,
                 "title_zh": p.title_zh,
                 "url": p.link_abs,
+                "link_label": paper_primary_link_label(p),
                 "theme_id": f"kw:{primary}",
                 "theme_label": "全部论文" if primary == "__all_papers__" else format_keyword_label(primary),
                 "accepted_venue": p.accepted_venue,
+                "transfer": transfer_rank(p) > 0,
+                "transfer_rank": transfer_rank(p),
                 "keywords": [format_keyword_label(k) for k in (keys[:4] if keys else paper_keywords.get(pid, [])[:4])],
             }
         )
@@ -2916,6 +3362,7 @@ def build_knowledge_graph_data(
 
     uncovered_papers = [p for p in unique_papers if (p.arxiv_id or p.link_abs) not in covered_papers]
     if uncovered_papers:
+        all_sorted_papers = sorted(unique_papers, key=lambda paper: paper_sort_key(paper), reverse=True)
         themes.append(
             {
                 "id": "kw:__all_papers__",
@@ -2924,27 +3371,17 @@ def build_knowledge_graph_data(
                 "is_venue_theme": False,
                 "is_generic_theme": False,
                 "paper_count": len(unique_papers),
-                "focus_count": sum(1 for p in unique_papers if focus_score(p) > 0),
+                "focus_count": sum(1 for p in unique_papers if is_focus_paper(p)),
                 "accepted_count": sum(1 for p in unique_papers if accepted_rank(p) > 0),
+                "transfer_count": sum(1 for p in unique_papers if transfer_rank(p) > 0),
                 "theme_kind": "general",
                 "latest_published": max((safe_text(p.published) for p in unique_papers), default=""),
                 "areas": sorted({p.major_area for p in unique_papers if p.major_area})[:3],
                 "score": 0.0,
                 "share_pct": 100.0,
                 "related_keywords": [],
-                "papers": [
-                    {
-                        "id": p.arxiv_id or p.link_abs,
-                        "title": p.title,
-                        "title_zh": p.title_zh,
-                        "summary_zh": p.summary_zh,
-                        "url": p.link_abs,
-                        "accepted_venue": p.accepted_venue,
-                        "published": p.published,
-                        "focus": focus_score(p) > 0,
-                    }
-                    for p in unique_papers
-                ],
+                "graph_neighbors": [],
+                "papers": [graph_paper_row(p) for p in all_sorted_papers],
                 "accepted_papers": [
                     {
                         "id": p.arxiv_id or p.link_abs,
@@ -2952,8 +3389,10 @@ def build_knowledge_graph_data(
                         "title_zh": p.title_zh,
                         "url": p.link_abs,
                         "accepted_venue": p.accepted_venue,
+                        "accepted_label": paper_signal_label(p),
+                        "transfer": transfer_rank(p) > 0,
                     }
-                    for p in unique_papers if accepted_rank(p) > 0
+                    for p in all_sorted_papers if accepted_rank(p) > 0
                 ],
                 "focus_papers": [
                     {
@@ -2961,8 +3400,19 @@ def build_knowledge_graph_data(
                         "title": p.title,
                         "title_zh": p.title_zh,
                         "url": p.link_abs,
+                        "transfer": transfer_rank(p) > 0,
                     }
-                    for p in unique_papers if focus_score(p) > 0
+                    for p in all_sorted_papers if is_focus_paper(p)
+                ],
+                "transfer_papers": [
+                    {
+                        "id": p.arxiv_id or p.link_abs,
+                        "title": p.title,
+                        "title_zh": p.title_zh,
+                        "url": p.link_abs,
+                        "transfer_rank": transfer_rank(p),
+                    }
+                    for p in all_sorted_papers if transfer_rank(p) > 0
                 ],
             }
         )
@@ -2973,6 +3423,9 @@ def build_knowledge_graph_data(
             "paper_count": len(unique_papers),
             "theme_count": len(themes),
             "relation_count": len(relation_rows),
+            "accepted_count": sum(1 for p in unique_papers if accepted_rank(p) > 0),
+            "focus_count": sum(1 for p in unique_papers if is_focus_paper(p)),
+            "transfer_count": sum(1 for p in unique_papers if transfer_rank(p) > 0),
         },
         "themes": themes,
         "relations": relation_rows,
@@ -2995,9 +3448,10 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
       <p class='subtitle'>参考 Karpathy 式 arXiv 探索思路，把图谱从“全局一张大网”改成“先检索主题，再看局部关系和全部论文”的探索器。默认视图先把当前主题和一级关联主题铺满画布，二级延伸主题放在更外圈，只有缩小或拖拽时才逐步进入视野。</p>
     </div>
     <div class='graph-stat-grid'>
-      <div><strong>__PAPER_COUNT__</strong><span>覆盖论文</span></div>
-      <div><strong>__THEME_COUNT__</strong><span>可探索主题</span></div>
-      <div><strong>__RELATION_COUNT__</strong><span>主题关系</span></div>
+      <div><strong>__PAPER_COUNT__</strong><span>覆盖论文数</span></div>
+      <div><strong>__ACCEPTED_COUNT__</strong><span>中稿数</span></div>
+      <div><strong>__FOCUS_COUNT__</strong><span>Focus数</span></div>
+      <div><strong>__TRANSFER_COUNT__</strong><span>可迁移数</span></div>
     </div>
   </div>
   <div class='graph-toolbar-shell'>
@@ -3019,7 +3473,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
     <aside class='kg-sidebar'>
       <div class='kg-sidebar-head'>
         <h3>主题索引</h3>
-        <p>按覆盖论文、Focus 命中和中稿线索综合排序。先从这里选主题，再到中间看关系网。</p>
+        <p>按覆盖论文、可迁移、Focus 命中和中稿线索综合排序。先从这里选主题，再到中间看关系网。</p>
       </div>
       <div id='kg-search-results' class='kg-search-results' hidden></div>
       <div id='kg-theme-list' class='kg-theme-list'></div>
@@ -3047,7 +3501,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
       <h3>交互说明</h3>
       <p>1. 先在左侧主题索引或搜索框里定位主题。</p>
       <p>2. 中间默认展开一级关系和二级延伸关系，帮助你同时看核心主题与外延方向。</p>
-      <p>3. 右侧同时展示该主题下的全部论文、Focus 论文和中稿线索论文。</p>
+      <p>3. 右侧同时展示该主题下的全部论文、可迁移论文、Focus 论文和中稿线索论文。</p>
       <p class='graph-panel-note'>右侧内容只在点击时变化，因此不会因为鼠标移动而让页面抖动。</p>
     </aside>
   </div>
@@ -3091,6 +3545,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;')
       .replaceAll("'", '&#39;');
+    const paperDomId = (paperId) => `kg-paper-${encodeURIComponent(String(paperId || ''))}`;
 
     const chipHtml = (items, cls = 'kg-chip') => (items || []).filter(Boolean).map(item => `<span class="${cls}">${escapeHtml(item)}</span>`).join('');
     const wrapLabel = (label, limit = 18) => {
@@ -3128,23 +3583,29 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
     const metricHtml = (theme) => `
       <div class="kg-metric-grid">
         <div><strong>${theme.paper_count || 0}</strong><span>论文</span></div>
-        <div><strong>${theme.focus_count || 0}</strong><span>Focus</span></div>
         <div><strong>${theme.accepted_count || 0}</strong><span>中稿线索</span></div>
-        <div><strong>${theme.related_count || (theme.related_keywords ? theme.related_keywords.length : 0)}</strong><span>强相关主题</span></div>
+        <div><strong>${theme.focus_count || 0}</strong><span>Focus</span></div>
+        <div><strong>${theme.transfer_count || 0}</strong><span>可迁移</span></div>
       </div>
     `;
 
     const paperRowHtml = (item, highlightId = '') => {
       const title = item.title_zh || item.title || item.id;
-      const venue = item.accepted_venue ? `<span class="kg-paper-venue">${escapeHtml(item.accepted_venue)}</span>` : '';
+      const venue = item.accepted_signal ? `<span class="kg-paper-venue">中稿: ${escapeHtml(item.accepted_label || item.accepted_venue || '')}</span>` : '';
+      const source = item.source_platform && item.source_platform !== 'arXiv' ? `<span class="kg-paper-venue">${escapeHtml(item.source_platform)}</span>` : '';
+      const fullText = item.full_text_status ? `<span class="kg-paper-venue">${escapeHtml(item.full_text_status)}</span>` : '';
+      const dateFlag = item.source_year ? `<span class="kg-paper-venue">年份: ${escapeHtml(item.source_year)}</span>` : (item.source_date_precision && item.source_date_precision !== 'day' ? `<span class="kg-paper-venue">日期: ${escapeHtml(item.source_date_precision)}</span>` : '');
       const focusBadge = item.focus ? '<span class="kg-paper-focus">Focus</span>' : '';
-      const summary = item.summary_zh ? `<p>${escapeHtml(item.summary_zh || '')}</p>` : '';
+      const transferBadge = item.transfer ? '<span class="kg-paper-transfer">可迁移</span>' : '';
+      const summary = item.summary_zh ? `<p class="kg-paper-summary">${escapeHtml(item.summary_zh || '')}</p>` : '';
+      const transferNote = item.transfer_note_zh ? `<div class="kg-transfer-block"><div class="kg-transfer-label">可迁移思路</div><p class="kg-transfer-note">${escapeHtml(item.transfer_note_zh)}</p></div>` : '';
       const selectedClass = highlightId && highlightId === item.id ? ' is-highlight' : '';
+      const transferClass = item.transfer ? ' is-transferable' : '';
       return `
-        <li class="kg-paper-item${selectedClass}">
+        <li class="kg-paper-item${selectedClass}${transferClass}" id="${paperDomId(item.id)}">
           <a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(title)}</a>
-          <div class="kg-paper-meta">${venue}${focusBadge}</div>
-          ${summary}
+          <div class="kg-paper-meta">${venue}${source}${fullText}${dateFlag}${focusBadge}${transferBadge}</div>
+          ${summary}${transferNote}
         </li>
       `;
     };
@@ -3155,7 +3616,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
           <h3>交互说明</h3>
           <p>1. 先从左侧主题索引或搜索结果中选择一个主题。</p>
           <p>2. 中间画布默认优先展示当前主题和一级关联主题，二级延伸主题位于更外圈，需要缩小或拖拽后再看全。</p>
-          <p>3. 右侧会给出该主题下的全部论文、Focus 论文和中稿线索论文。</p>
+          <p>3. 右侧会给出该主题下的全部论文、可迁移论文、Focus 论文和中稿线索论文。</p>
           <p class="graph-panel-note">右侧内容只在点击时变化，因此不会再因为鼠标移动而让页面抖动。</p>
         `;
         return;
@@ -3167,11 +3628,15 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
 
       const topPapers = (theme.papers || []).map(item => paperRowHtml(item, highlightPaperId)).join('');
       const acceptedPapers = (theme.accepted_papers || []).map(item => `
-        <li><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.title_zh || item.title || item.id)}</a>${item.accepted_venue ? `<span class="kg-paper-venue">${escapeHtml(item.accepted_venue)}</span>` : ''}</li>
+        <li><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.title_zh || item.title || item.id)}</a>${item.accepted_label ? `<span class="kg-paper-venue">中稿: ${escapeHtml(item.accepted_label)}</span>` : ''}${item.transfer ? '<span class="kg-paper-transfer kg-paper-transfer-inline">可迁移</span>' : ''}</li>
       `).join('');
       const focusPapers = (theme.focus_papers || []).map(item => `
-        <li><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.title_zh || item.title || item.id)}</a></li>
+        <li><a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.title_zh || item.title || item.id)}</a>${item.transfer ? '<span class="kg-paper-transfer kg-paper-transfer-inline">可迁移</span>' : ''}</li>
       `).join('');
+      const transferPapers = (theme.transfer_papers || []).map(item => `
+        <li><button type="button" class="kg-inline-btn kg-paper-jump-btn" data-paper-id="${escapeHtml(item.id)}">${escapeHtml(item.title_zh || item.title || item.id)}</button><span class="kg-paper-transfer kg-paper-transfer-inline">可迁移</span></li>
+      `).join('');
+      const transferPaperCount = theme.transfer_count || (theme.transfer_papers ? theme.transfer_papers.length : 0);
       const areaChips = chipHtml(theme.areas || [], 'kg-chip kg-chip-soft');
       const stateChips = chipHtml([
         theme.theme_kind === 'focus' ? 'Focus主题' : '',
@@ -3181,7 +3646,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
 
       panel.innerHTML = `
         <h3>${escapeHtml(theme.label)}</h3>
-        <p class="kg-panel-desc">当前主题覆盖 ${theme.paper_count || 0} 篇论文，其中 Focus 命中 ${theme.focus_count || 0} 篇，中稿线索 ${theme.accepted_count || 0} 篇。你可以拖动与缩放图谱继续探索，也可以用下方链接直接打开 arXiv 搜索。</p>
+        <p class="kg-panel-desc">当前主题覆盖 ${theme.paper_count || 0} 篇论文，其中可迁移候选 ${transferPaperCount || 0} 篇，Focus 命中 ${theme.focus_count || 0} 篇，中稿线索 ${theme.accepted_count || 0} 篇。你可以拖动与缩放图谱继续探索，也可以用下方链接直接打开 arXiv 搜索。</p>
         <div class="kg-chip-row">${stateChips}${areaChips}</div>
         ${metricHtml(theme)}
         <p class="kg-panel-links"><a href="https://arxiv.org/search/?query=${encodeURIComponent(theme.raw_keyword || '')}&searchtype=all" target="_blank">打开 arXiv 搜索</a></p>
@@ -3203,10 +3668,22 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
             <ul class="kg-related-list">${focusPapers || '<li>暂无Focus论文。</li>'}</ul>
           </div>
         </div>
+        <div class="kg-subblock">
+          <h4>可迁移论文 (${transferPaperCount || 0})</h4>
+          <ul class="kg-related-list">${transferPapers || '<li>暂无建议迁移或待验证论文。</li>'}</ul>
+        </div>
       `;
 
       panel.querySelectorAll('.kg-inline-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+          const paperId = btn.getAttribute('data-paper-id') || '';
+          if (paperId) {
+            highlightedPaperId = paperId;
+            renderPanel(theme, highlightedPaperId);
+            const paperEl = document.getElementById(paperDomId(paperId));
+            if (paperEl) paperEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+          }
           const targetId = btn.getAttribute('data-target') || '';
           const target = themeMap.get(targetId);
           if (!target) return;
@@ -3222,7 +3699,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
     };
 
     const setTooltip = (evt, theme) => {
-      tooltip.innerHTML = `<strong>${escapeHtml(theme.label)}</strong><span>${escapeHtml(`${theme.paper_count || 0} 篇论文 · Focus ${theme.focus_count || 0} · 中稿 ${theme.accepted_count || 0}`)}</span>`;
+      tooltip.innerHTML = `<strong>${escapeHtml(theme.label)}</strong><span>${escapeHtml(`${theme.paper_count || 0} 篇论文 · 中稿 ${theme.accepted_count || 0} · Focus ${theme.focus_count || 0} · 可迁移 ${theme.transfer_count || 0}`)}</span>`;
       tooltip.hidden = false;
       const rect = svg.getBoundingClientRect();
       tooltip.style.left = `${evt.clientX - rect.left + 16}px`;
@@ -3255,12 +3732,12 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
         const rightPreferred = (right.is_generic_theme || right.is_venue_theme) ? 0 : 1;
         if (rightPreferred !== leftPreferred) return rightPreferred - leftPreferred;
         if (mode === 'focus') {
-          return (right.focus_count - left.focus_count) || (right.paper_count - left.paper_count) || (right.score - left.score);
+          return (right.focus_count - left.focus_count) || (right.transfer_count - left.transfer_count) || (right.paper_count - left.paper_count) || (right.score - left.score);
         }
         if (mode === 'signal') {
-          return (right.accepted_count - left.accepted_count) || (right.paper_count - left.paper_count) || (right.score - left.score);
+          return (right.accepted_count - left.accepted_count) || (right.transfer_count - left.transfer_count) || (right.paper_count - left.paper_count) || (right.score - left.score);
         }
-        return (right.score - left.score) || (right.paper_count - left.paper_count) || (right.accepted_count - left.accepted_count);
+        return (right.transfer_count - left.transfer_count) || (right.score - left.score) || (right.paper_count - left.paper_count) || (right.accepted_count - left.accepted_count) || (right.focus_count - left.focus_count);
       });
       return rows;
     };
@@ -3268,6 +3745,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
     const themeBadgeList = (theme) => {
       const badges = [
         `${theme.paper_count || 0}篇`,
+        theme.transfer_count ? `可迁移 ${theme.transfer_count}` : '',
         theme.focus_count ? `Focus ${theme.focus_count}` : '',
         theme.accepted_count ? `中稿 ${theme.accepted_count}` : '',
       ].filter(Boolean);
@@ -3346,7 +3824,7 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
           ${themeMatches.map(theme => `
             <button type="button" class="kg-result-row" data-kind="theme" data-target="${escapeHtml(theme.id)}">
               <strong>${escapeHtml(theme.label)}</strong>
-              <span>${theme.paper_count || 0}篇 · Focus ${theme.focus_count || 0} · 中稿 ${theme.accepted_count || 0}</span>
+              <span>${theme.paper_count || 0}篇 · 中稿 ${theme.accepted_count || 0} · Focus ${theme.focus_count || 0} · 可迁移 ${theme.transfer_count || 0}</span>
             </button>
           `).join('') || '<p class="kg-empty">没有主题命中。</p>'}
         </div>
@@ -3356,9 +3834,9 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
             <div class="kg-result-row kg-result-paper">
               <button type="button" data-kind="paper" data-target="${escapeHtml(item.theme_id || '')}" data-paper-id="${escapeHtml(item.id)}">
                 <strong>${escapeHtml(item.title_zh || item.title || item.id)}</strong>
-                <span>${escapeHtml(item.theme_label || '')}</span>
+                <span>${escapeHtml(item.theme_label || '')}${item.transfer ? ' · 可迁移' : ''}</span>
               </button>
-              <a href="${escapeHtml(item.url)}" target="_blank">arXiv</a>
+              <a href="${escapeHtml(item.url)}" target="_blank">${escapeHtml(item.link_label || '详情')}</a>
             </div>
           `).join('') || '<p class="kg-empty">没有论文命中。</p>'}
         </div>
@@ -3714,6 +4192,30 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
       highlightedPaperId = '';
     };
 
+    const jumpToPaper = (paperId) => {
+      const targetId = String(paperId || '');
+      if (!targetId) return false;
+      const target = (data.paper_search || []).find(item => String(item.id || '') === targetId);
+      highlightedPaperId = targetId;
+      if (target && target.theme_id && themeMap.has(target.theme_id)) {
+        selectTheme(target.theme_id);
+      } else if (activeId && themeMap.has(activeId)) {
+        renderPanel(themeMap.get(activeId), highlightedPaperId);
+        highlightedPaperId = '';
+      }
+      window.requestAnimationFrame(() => {
+        const graphSection = document.getElementById('knowledge-graph');
+        const paperEl = document.getElementById(paperDomId(targetId));
+        if (paperEl) {
+          paperEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (graphSection) {
+          graphSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+      return true;
+    };
+    window.__kgJumpToPaperById = jumpToPaper;
+
     const setSortMode = (mode) => {
       sortMode = mode;
       sortDefaultBtn.classList.toggle('is-active', mode === 'default');
@@ -3784,8 +4286,9 @@ def render_knowledge_graph_section(papers: List[Paper]) -> str:
     return (
         html_block.replace("__PAYLOAD__", payload)
         .replace("__PAPER_COUNT__", str(graph_data["stats"]["paper_count"]))
-        .replace("__THEME_COUNT__", str(graph_data["stats"]["theme_count"]))
-        .replace("__RELATION_COUNT__", str(graph_data["stats"]["relation_count"]))
+        .replace("__ACCEPTED_COUNT__", str(graph_data["stats"].get("accepted_count", 0)))
+        .replace("__FOCUS_COUNT__", str(graph_data["stats"].get("focus_count", 0)))
+        .replace("__TRANSFER_COUNT__", str(graph_data["stats"].get("transfer_count", 0)))
     )
 
 
@@ -3812,14 +4315,35 @@ def render_html_section_overview(title: str, papers: List[Paper], prefix: str) -
         out.append(f"<span><strong>类型:</strong> {html.escape(', '.join(type_tags))}</span> ")
         if p.accepted_venue:
             out.append(f"<span><strong>中稿线索:</strong> {html.escape(p.accepted_venue)}</span>")
+        elif accepted_rank(p) > 0:
+            out.append(f"<span><strong>中稿线索:</strong> {html.escape(paper_signal_label(p))}</span>")
+        if p.source_platform and p.source_platform != "arXiv":
+            out.append(f"<span><strong>来源:</strong> {html.escape(p.source_platform)}</span> ")
+        if p.full_text_status:
+            out.append(f"<span><strong>全文状态:</strong> {html.escape(p.full_text_status)}</span> ")
+        if p.source_platform and p.source_platform != "arXiv" and p.source_date_precision:
+            out.append(f"<span><strong>日期依据:</strong> {html.escape(p.source_date_precision)}</span> ")
+        if p.source_platform and p.source_platform != "arXiv" and p.source_year:
+            out.append(f"<span><strong>年份:</strong> {html.escape(p.source_year)}</span> ")
         out.append("</p>")
+        primary_label = paper_primary_link_label(p)
+        secondary_label = paper_secondary_link_label(p)
+        secondary_url = p.full_text_url or p.link_pdf or p.link_abs
         out.append("<p class='links'>")
-        out.append(f"<a href='{html.escape(p.link_abs)}' target='_blank'>arXiv</a> | ")
-        out.append(f"<a href='{html.escape(p.link_pdf)}' target='_blank'>PDF</a>")
+        out.append(f"<a href='{html.escape(p.link_abs)}' target='_blank'>{html.escape(primary_label)}</a> | ")
+        out.append(f"<a href='{html.escape(secondary_url)}' target='_blank'>{html.escape(secondary_label)}</a>")
         out.append("</p>")
         out.append("</article>")
     out.append("</div></section>")
     return "\n".join(out)
+
+
+def resolve_report_title(categories: List[str]) -> str:
+    if categories == ["cs.AI"]:
+        return "arXiv AI 每日追踪与重点方向报告"
+    if set(categories) == {"cs.CV", "cs.AI"}:
+        return "arXiv CV/AI 每日追踪与重点方向报告"
+    return "arXiv CV 每日追踪与重点方向报告"
 
 
 def render_html_report(
@@ -3838,6 +4362,34 @@ def render_html_report(
     show_focus_hot = len(focus_hot) > 0
     show_venue_pool = len(venue_pool) > 0
     show_venue_watch = len(venue_watch) > 0
+    focus_transfer_meta = report_meta.get("focus_transfer") if isinstance(report_meta, dict) and isinstance(report_meta.get("focus_transfer"), dict) else {}
+    graph_html_override = str(report_meta.get("graph_html_override", "")) if isinstance(report_meta, dict) else ""
+    after_graph_html = str(report_meta.get("after_graph_html", "")) if isinstance(report_meta, dict) else ""
+    focus_transfer_status = safe_text(str(focus_transfer_meta.get("status", ""))) or "not_analyzed"
+    focus_transfer_status_zh = safe_text(str(focus_transfer_meta.get("status_zh", "")))
+    if not focus_transfer_status_zh:
+        focus_transfer_status_zh = {
+            "analyzed": "已完成可迁移性分析",
+            "not_analyzed": "当前未分析可迁移性",
+            "failed": "可迁移性分析失败",
+        }.get(focus_transfer_status, "当前未分析可迁移性")
+    focus_transfer_note = safe_text(str(focus_transfer_meta.get("note", "")))
+    focus_transfer_keep_count = int(focus_transfer_meta.get("keep_count", 0) or 0)
+    focus_transfer_maybe_count = int(focus_transfer_meta.get("maybe_count", 0) or 0)
+    focus_transfer_keep_targets: List[Dict[str, str]] = []
+    for target in list(focus_transfer_meta.get("keep_targets", []) or []):
+        if not isinstance(target, dict):
+            continue
+        paper_id = safe_text(str(target.get("paper_id", "")))
+        if not paper_id:
+            continue
+        focus_transfer_keep_targets.append(
+            {
+                "paper_id": paper_id,
+                "title": safe_text(str(target.get("title", ""))),
+                "title_zh": safe_text(str(target.get("title_zh", ""))) or paper_id,
+            }
+        )
     graph_papers = dedupe_papers(
         [p for rows in daily_groups.values() for p in rows] + focus_latest + focus_hot + venue_pool + venue_watch
     )
@@ -3942,6 +4494,78 @@ nav a {
   line-height: 1.5;
   word-break: break-all;
 }
+.focus-transfer-strip {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid #d7e6f1;
+  background: linear-gradient(135deg, rgba(239, 248, 255, 0.96), rgba(248, 252, 255, 0.96));
+}
+.focus-transfer-strip h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: #0f4f72;
+}
+.focus-transfer-strip p {
+  margin: 0 0 12px;
+  color: #33556d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.focus-transfer-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.focus-transfer-card {
+  border-radius: 14px;
+  border: 1px solid rgba(15, 79, 114, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  padding: 14px 16px;
+  min-height: 96px;
+}
+.focus-transfer-card strong {
+  display: block;
+  font-size: 30px;
+  line-height: 1.1;
+  color: #0f4f72;
+  margin-bottom: 8px;
+}
+.focus-transfer-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+.focus-transfer-card small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.focus-transfer-jumpbar {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.focus-transfer-jumpbar button {
+  border: 1px solid #b7e7d8;
+  background: #e8f7f1;
+  color: #084d3a;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.focus-transfer-jumpbar button:hover {
+  background: #d8f1e7;
+}
+.focus-transfer-jump-title {
+  flex-basis: 100%;
+  color: #33556d;
+}
 section {
   margin-top: 18px;
   background: var(--panel);
@@ -3997,7 +4621,7 @@ section {
 .graph-hero h2 { margin: 0 0 10px; font-size: 30px; }
 .graph-stat-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   align-self: start;
 }
@@ -4568,6 +5192,11 @@ section {
   background: #fbfdff;
   border: 1px solid transparent;
 }
+.kg-paper-item.is-transferable {
+  border-color: #86efac;
+  background: linear-gradient(180deg, #f8fffb 0%, #effcf5 100%);
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.08);
+}
 .kg-paper-item.is-highlight {
   border-color: #f97316;
   background: #fff7ed;
@@ -4595,6 +5224,41 @@ section {
   color: #0b6b51;
   border: 1px solid #cce8dd;
   font-size: 11px;
+}
+.kg-paper-transfer {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #edf7f3;
+  color: #0b6b51;
+  border: 1px solid #cce8dd;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.kg-paper-transfer-inline { margin-left: 8px; }
+.kg-paper-summary { margin: 6px 0 0; }
+.kg-transfer-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #bbf7d0;
+  border-left: 4px solid #16a34a;
+  background: #ecfdf5;
+}
+.kg-transfer-label {
+  color: #047857;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.kg-transfer-note {
+  margin: 6px 0 0;
+  color: #065f46;
+  font-size: 13px;
+  line-height: 1.7;
+  font-weight: 700;
 }
 .kg-empty {
   color: var(--muted);
@@ -4664,7 +5328,7 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
     grid-template-columns: 1fr;
   }
   .graph-stat-grid {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
   }
   .run-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4691,7 +5355,7 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
         subtitle_parts.append(f"顶会顶刊线索: {len(venue_watch)}")
     body.append(f"<p class='subtitle'>{' | '.join(subtitle_parts)}</p>")
     fetch_summary = report_meta.get("fetch_summary") if isinstance(report_meta, dict) else None
-    if isinstance(fetch_summary, dict):
+    if isinstance(fetch_summary, dict) and fetch_summary.get("enabled", True):
         ignore_mode = "已启用忽略已抓取" if fetch_summary.get("ignore_fetched") else "未启用忽略已抓取"
         state_path = html.escape(str(fetch_summary.get("state_path", "")))
         selected_seen_count = int(fetch_summary.get("selected_seen_count", 0))
@@ -4702,6 +5366,7 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
         body.append(
             "<p class='run-summary-note'>"
             f"抓取记录摘要按最终报告中的唯一论文统计；本次状态: {html.escape(ignore_mode)}。"
+            "新增指本次首次看到且更新于当前状态表最新论文之后的论文；历史回补指此前未抓过、但早于当前最新记录、用于补足本次报告数量的论文。"
             f"{html.escape(note_suffix)}"
             "</p>"
         )
@@ -4715,7 +5380,7 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
         body.append(
             "<div class='run-summary-card'>"
             f"<strong>{int(fetch_summary.get('backfill_count', 0))}</strong>"
-            "<span>本次回补数</span>"
+            "<span>历史回补数</span>"
             "</div>"
         )
         body.append(
@@ -4732,6 +5397,127 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
             "</div>"
         )
         body.append("</div></div>")
+    source_summary = report_meta.get("source_summary") if isinstance(report_meta, dict) else None
+    if isinstance(source_summary, dict):
+        note = safe_text(str(source_summary.get("note", "")))
+        cards = source_summary.get("cards", []) or []
+        body.append("<div class='run-summary-wrap'>")
+        if note:
+            body.append(f"<p class='run-summary-note'>{html.escape(note)}</p>")
+        body.append("<div class='run-summary-grid'>")
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            value = safe_text(str(card.get("value", "")))
+            label = safe_text(str(card.get("label", "")))
+            detail = safe_text(str(card.get("detail", "")))
+            body.append("<div class='run-summary-card'>")
+            body.append(f"<strong>{html.escape(value)}</strong>")
+            body.append(f"<span>{html.escape(label)}</span>")
+            if detail:
+                body.append(f"<div class='run-summary-path'>{html.escape(detail)}</div>")
+            body.append("</div>")
+        body.append("</div></div>")
+    transfer_note = focus_transfer_note
+    if not transfer_note:
+        if focus_transfer_status == "analyzed":
+            transfer_note = "已将建议迁移与待验证结果合并进知识图谱右侧，并在知识图谱下方追加发展趋势与热点问题。"
+        elif focus_transfer_status == "failed":
+            transfer_note = "本次尝试过可迁移性分析，但流程未成功完成，主日报仍保持可正常阅读。"
+        else:
+            transfer_note = "本次未启用可迁移性分析，知识图谱中不会出现“可迁移”判断与趋势总结。"
+    body.append("<div class='focus-transfer-strip'>")
+    body.append(f"<h3>{html.escape(focus_transfer_status_zh)}</h3>")
+    body.append(f"<p>{html.escape(transfer_note)}</p>")
+    body.append("<div class='focus-transfer-cards'>")
+    if focus_transfer_status == "analyzed":
+        keep_jump_html = ""
+        if focus_transfer_keep_targets:
+            keep_jump_html = (
+                "<div class='focus-transfer-jumpbar' data-ft-keep-jumpbar>"
+                "<button type='button' data-ft-action='prev'>上一个建议</button>"
+                "<button type='button' data-ft-action='open'>查看第 1 篇</button>"
+                "<button type='button' data-ft-action='next'>下一个建议</button>"
+                "<small class='focus-transfer-jump-title' data-ft-title></small>"
+                "</div>"
+            )
+        body.append(
+            "<div class='focus-transfer-card'>"
+            f"<strong>{focus_transfer_keep_count}</strong>"
+            "<span>建议迁移</span>"
+            "<small>建议优先借鉴并直接纳入右侧论文卡片与可迁移列表。</small>"
+            f"{keep_jump_html}"
+            "</div>"
+        )
+        body.append(
+            "<div class='focus-transfer-card'>"
+            f"<strong>{focus_transfer_maybe_count}</strong>"
+            "<span>待验证</span>"
+            "<small>建议先做最小实验，再决定是否投入后续路线。</small>"
+            "</div>"
+        )
+    else:
+        body.append(
+            "<div class='focus-transfer-card'>"
+            "<strong>--</strong>"
+            "<span>可迁移性分析</span>"
+            f"<small>{html.escape(focus_transfer_status_zh)}</small>"
+            "</div>"
+        )
+    body.append("</div></div>")
+    if focus_transfer_status == "analyzed" and focus_transfer_keep_targets:
+        keep_targets_json = json.dumps(focus_transfer_keep_targets, ensure_ascii=False).replace("</", "<\\/")
+        body.append(
+            "<script type='application/json' id='focus-transfer-keep-targets'>"
+            f"{keep_targets_json}"
+            "</script>"
+        )
+        body.append(
+            """
+<script>
+(function() {
+  const jumpbar = document.querySelector('[data-ft-keep-jumpbar]');
+  const payloadEl = document.getElementById('focus-transfer-keep-targets');
+  if (!jumpbar || !payloadEl) return;
+  let targets = [];
+  try {
+    targets = JSON.parse(payloadEl.textContent || '[]');
+  } catch (_err) {
+    targets = [];
+  }
+  if (!targets.length) return;
+  let index = 0;
+  const titleEl = jumpbar.querySelector('[data-ft-title]');
+  const openBtn = jumpbar.querySelector('[data-ft-action="open"]');
+  const update = () => {
+    const current = targets[index] || {};
+    if (openBtn) openBtn.textContent = `查看第 ${index + 1}/${targets.length} 篇`;
+    if (titleEl) titleEl.textContent = current.title_zh || current.title || current.paper_id || '';
+  };
+  const jump = () => {
+    const current = targets[index] || {};
+    const paperId = current.paper_id || '';
+    if (paperId && typeof window.__kgJumpToPaperById === 'function') {
+      window.__kgJumpToPaperById(paperId);
+      return;
+    }
+    const graph = document.getElementById('knowledge-graph');
+    if (graph) graph.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  jumpbar.querySelectorAll('[data-ft-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const action = btn.getAttribute('data-ft-action') || 'open';
+      if (action === 'prev') index = (index - 1 + targets.length) % targets.length;
+      if (action === 'next') index = (index + 1) % targets.length;
+      update();
+      jump();
+    });
+  });
+  update();
+})();
+</script>
+"""
+        )
     body.append("<nav>")
     if daily_groups.get("CV"):
         body.append("<a href='#daily-cv'>Daily CV</a>")
@@ -4743,6 +5529,8 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
         body.append("<a href='#daily-other'>Daily Other</a>")
     if show_graph:
         body.append("<a href='#knowledge-graph'>知识图谱</a>")
+    if after_graph_html:
+        body.append("<a href='#focus-transfer-trends'>趋势与热点</a>")
     body.append(f"<a href='#focus-latest'>Focus 最新{len(focus_latest) if focus_latest else 0}</a>")
     if show_focus_hot:
         body.append(f"<a href='#focus-hot'>Focus 重点{len(focus_hot)}</a>")
@@ -4753,7 +5541,9 @@ footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
     body.append("</nav></header>")
 
     if show_graph:
-        body.append(render_knowledge_graph_section(graph_papers))
+        body.append(graph_html_override or render_knowledge_graph_section(graph_papers))
+        if after_graph_html:
+            body.append(after_graph_html)
 
     if daily_groups.get("CV"):
         body.append(render_html_section_overview("Daily - Computer Vision", daily_groups.get("CV", []), "daily-cv"))
@@ -4819,6 +5609,12 @@ def paper_from_dict(d: dict) -> Paper:
         keywords=list(d.get("keywords", []) or []),
         accepted_venue=str(d.get("accepted_venue", "")),
         accepted_hint=str(d.get("accepted_hint", "")),
+        source_platform=str(d.get("source_platform", "arXiv") or "arXiv"),
+        source_venue=str(d.get("source_venue", "")),
+        full_text_status=str(d.get("full_text_status", "")),
+        full_text_url=str(d.get("full_text_url", "")),
+        source_date_precision=str(d.get("source_date_precision", "")),
+        source_year=str(d.get("source_year", "")),
     )
     return refresh_paper_derived_fields(paper)
 
@@ -4893,20 +5689,7 @@ def is_newer_arxiv_id(candidate: str, baseline: str) -> bool:
 def build_fetch_state_config(args: argparse.Namespace, categories: List[str], focus_terms: List[str]) -> Dict[str, object]:
     return {
         "version": FETCH_STATE_VERSION,
-        "domain": safe_text(args.domain).lower(),
-        "categories": sorted({safe_text(cat) for cat in categories if safe_text(cat)}),
-        "arxiv_mode": safe_text(args.arxiv_mode).lower(),
-        "day_window_days": int(args.day_window_days),
-        "daily_limit_per_cat": int(args.daily_limit_per_cat),
-        "page_size": int(args.page_size),
-        "max_scan": int(args.max_scan),
-        "focus_latest": int(args.focus_latest),
-        "focus_hot": int(args.focus_hot),
-        "focus_api_enable": int(args.focus_api_enable),
-        "focus_recent_scan": int(args.focus_recent_scan),
-        "focus_terms": sorted({safe_text(term).lower() for term in focus_terms if safe_text(term)}),
-        "venue_latest": int(args.venue_latest),
-        "venue_watch_limit": int(args.venue_watch_limit),
+        "focus_terms": sorted(normalize_focus_terms(focus_terms)),
     }
 
 
@@ -4916,11 +5699,12 @@ def fetch_state_signature(config: Dict[str, object]) -> str:
 
 
 def fetch_state_slug(config: Dict[str, object]) -> str:
-    domain = safe_text(str(config.get("domain", "digest"))).lower() or "digest"
-    categories = [safe_text(str(cat)).lower().replace(".", "") for cat in list(config.get("categories", []) or []) if safe_text(str(cat))]
-    cat_part = "-".join(categories[:2]) if categories else domain
-    base = normalize_output_suffix(f"{domain}_{cat_part}")
-    return base or "digest"
+    focus_terms = [normalize_focus_term(str(term)) for term in list(config.get("focus_terms", []) or []) if normalize_focus_term(str(term))]
+    if not focus_terms:
+        return "focus_none"
+    readable = "-".join(focus_terms[:2])
+    base = normalize_output_suffix(f"focus_{readable}")
+    return base or "focus"
 
 
 def load_fetch_state(path: str) -> Dict[str, object]:
@@ -4932,6 +5716,127 @@ def load_fetch_state(path: str) -> Dict[str, object]:
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def focus_terms_from_fetch_state(state: Dict[str, object]) -> List[str]:
+    config = state.get("config", {})
+    if isinstance(config, dict):
+        return sorted(normalize_focus_terms(list(config.get("focus_terms", []) or [])))
+    return sorted(normalize_focus_terms(list(state.get("focus_terms", []) or [])))
+
+
+def merge_fetch_state_dicts(states: List[Dict[str, object]], config: Dict[str, object], signature: str, source_paths: List[str]) -> Dict[str, object]:
+    merged: Dict[str, object] = {}
+    fetched_ids: Dict[str, Dict[str, str]] = {}
+    created_candidates: List[str] = []
+    updated_candidates: List[str] = []
+    history_rows: List[Dict[str, object]] = []
+    last_run_candidates: List[Dict[str, object]] = []
+
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        created_at = safe_text(str(state.get("created_at", "")))
+        updated_at = safe_text(str(state.get("updated_at", "")))
+        if created_at:
+            created_candidates.append(created_at)
+        if updated_at:
+            updated_candidates.append(updated_at)
+        fetched = state.get("fetched_ids", {})
+        if isinstance(fetched, dict):
+            for raw_pid, raw_meta in fetched.items():
+                pid = normalize_arxiv_id(str(raw_pid))
+                if not pid:
+                    continue
+                meta = raw_meta if isinstance(raw_meta, dict) else {}
+                first_seen = safe_text(str(meta.get("first_seen_run_date", "")))
+                last_seen = safe_text(str(meta.get("last_seen_run_date", "")))
+                existing = fetched_ids.get(pid, {})
+                merged_first = min([x for x in [safe_text(str(existing.get("first_seen_run_date", ""))), first_seen] if x], default="")
+                merged_last = max([x for x in [safe_text(str(existing.get("last_seen_run_date", ""))), last_seen] if x], default="")
+                fetched_ids[pid] = {
+                    "first_seen_run_date": merged_first,
+                    "last_seen_run_date": merged_last,
+                }
+        history = state.get("run_history", [])
+        if isinstance(history, list):
+            history_rows.extend([row for row in history if isinstance(row, dict)])
+        last_run = state.get("last_run")
+        if isinstance(last_run, dict):
+            last_run_candidates.append(last_run)
+
+    merged["version"] = FETCH_STATE_VERSION
+    merged["config_signature"] = signature
+    merged["config"] = config
+    merged["fetched_ids"] = fetched_ids
+    merged["fetched_count"] = len(fetched_ids)
+    merged["latest_fetched_arxiv_id"] = max_arxiv_id(fetched_ids.keys())
+    merged["oldest_fetched_arxiv_id"] = min_arxiv_id(fetched_ids.keys())
+    if created_candidates:
+        merged["created_at"] = min(created_candidates)
+    if updated_candidates:
+        merged["updated_at"] = max(updated_candidates)
+    if source_paths:
+        merged["legacy_source_paths"] = sorted(source_paths)
+
+    dedup_history: Dict[str, Dict[str, object]] = {}
+    for row in history_rows:
+        key = json.dumps(row, ensure_ascii=False, sort_keys=True)
+        dedup_history[key] = row
+    ordered_history = sorted(
+        dedup_history.values(),
+        key=lambda row: (
+            safe_text(str(row.get("date", ""))),
+            safe_text(str(row.get("newest_id", ""))),
+            safe_text(str(row.get("oldest_id", ""))),
+            int(row.get("reported_unique_ids", 0) or 0),
+        ),
+    )
+    if ordered_history:
+        merged["run_history"] = ordered_history[-40:]
+        merged["last_run"] = merged["run_history"][-1]
+    elif last_run_candidates:
+        ordered_last_runs = sorted(
+            last_run_candidates,
+            key=lambda row: (
+                safe_text(str(row.get("date", ""))),
+                safe_text(str(row.get("newest_id", ""))),
+                safe_text(str(row.get("oldest_id", ""))),
+                int(row.get("reported_unique_ids", 0) or 0),
+            ),
+        )
+        merged["last_run"] = ordered_last_runs[-1]
+    return merged
+
+
+def resolve_fetch_state(path: str, state_dir: str, config: Dict[str, object], signature: str) -> Tuple[Dict[str, object], List[str]]:
+    current = load_fetch_state(path)
+    if current:
+        return current, []
+
+    target_terms = sorted(normalize_focus_terms(list(config.get("focus_terms", []) or [])))
+    if not target_terms or not os.path.isdir(state_dir):
+        return {}, []
+
+    matching_paths: List[str] = []
+    matching_states: List[Dict[str, object]] = []
+    for name in sorted(os.listdir(state_dir)):
+        if not name.endswith(".json") or name.startswith("._"):
+            continue
+        candidate_path = os.path.join(state_dir, name)
+        if os.path.abspath(candidate_path) == os.path.abspath(path):
+            continue
+        candidate_state = load_fetch_state(candidate_path)
+        if not candidate_state:
+            continue
+        if focus_terms_from_fetch_state(candidate_state) != target_terms:
+            continue
+        matching_paths.append(candidate_path)
+        matching_states.append(candidate_state)
+
+    if not matching_states:
+        return {}, []
+    return merge_fetch_state_dicts(matching_states, config, signature, matching_paths), matching_paths
 
 
 def seen_ids_from_state(state: Dict[str, object]) -> set[str]:
@@ -5100,6 +6005,46 @@ def write_text(path: str, text: str) -> None:
         f.write(text)
 
 
+def archived_report_path(archive_dir: str, filename: str) -> str:
+    target = os.path.join(archive_dir, filename)
+    if not os.path.exists(target):
+        return target
+    stem, ext = os.path.splitext(filename)
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = os.path.join(archive_dir, f"{stem}_archived_{stamp}{ext}")
+    if not os.path.exists(candidate):
+        return candidate
+    for idx in range(1, 1000):
+        candidate = os.path.join(archive_dir, f"{stem}_archived_{stamp}_{idx}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+    return candidate
+
+
+def archive_previous_reports(report_dir: str, archive_folder: str = "previous_reports") -> Tuple[str, int]:
+    archive_dir = os.path.join(report_dir, archive_folder)
+    os.makedirs(archive_dir, exist_ok=True)
+    moved = 0
+    try:
+        entries = sorted(os.listdir(report_dir))
+    except FileNotFoundError:
+        return archive_dir, moved
+    report_pattern = re.compile(r"^\.?_?arxiv_digest_\d{4}-\d{2}-\d{2}.*\.(html|md)$", flags=re.I)
+    protected_names = {archive_folder, "research_workbench", "._research_workbench"}
+    for name in entries:
+        if name in protected_names:
+            continue
+        source = os.path.join(report_dir, name)
+        if os.path.isdir(source):
+            continue
+        if not report_pattern.match(name):
+            continue
+        target = archived_report_path(archive_dir, name)
+        os.replace(source, target)
+        moved += 1
+    return archive_dir, moved
+
+
 def count_llm_pending(
     papers: List[Paper],
     cache: Dict[str, dict],
@@ -5228,7 +6173,7 @@ def main() -> int:
     fetch_state_sig = fetch_state_signature(fetch_state_config)
     fetch_state_name = f"fetch_state_{fetch_state_slug(fetch_state_config)}_{fetch_state_sig}.json"
     fetch_state_path = os.path.join(fetch_state_dir, fetch_state_name)
-    fetch_state = load_fetch_state(fetch_state_path)
+    fetch_state, legacy_fetch_state_paths = resolve_fetch_state(fetch_state_path, fetch_state_dir, fetch_state_config, fetch_state_sig)
     seen_ids = seen_ids_from_state(fetch_state)
     latest_seen_id = latest_fetched_arxiv_id_from_state(fetch_state)
     ignored_seen_ids_union: set[str] = set()
@@ -5240,7 +6185,8 @@ def main() -> int:
     }
     if args.ignore_fetched:
         latest_note = f"，最新已抓取 ID {latest_seen_id}" if latest_seen_id else ""
-        print(f"[INFO] Fetch state: {fetch_state_path} (已记录 {len(seen_ids)} 篇{latest_note})")
+        legacy_note = f"，已合并历史状态 {len(legacy_fetch_state_paths)} 份" if legacy_fetch_state_paths else ""
+        print(f"[INFO] Fetch state: {fetch_state_path} (已记录 {len(seen_ids)} 篇{latest_note}{legacy_note})")
 
     # 1) Daily fetch
     daily_raw: List[Paper] = []
@@ -5532,12 +6478,7 @@ def main() -> int:
             print("[WARN] Fetch failed and returned empty dataset; keep previous report unchanged.")
             return 0
 
-    if categories == ["cs.AI"]:
-        report_title = "arXiv AI 每日追踪与重点方向报告"
-    elif set(categories) == {"cs.CV", "cs.AI"}:
-        report_title = "arXiv CV/AI 每日追踪与重点方向报告"
-    else:
-        report_title = "arXiv CV 每日追踪与重点方向报告"
+    report_title = resolve_report_title(categories)
     html_text = render_html_report(
         report_title,
         target_day,
@@ -5547,7 +6488,16 @@ def main() -> int:
         focus_hot,
         venue_pool,
         venue_watch,
-        report_meta={"fetch_summary": fetch_report_summary},
+        report_meta={
+            "fetch_summary": fetch_report_summary,
+            "focus_transfer": {
+                "status": "not_analyzed",
+                "status_zh": "当前未分析可迁移性",
+                "note": "如需把非 focus 论文的可迁移思路并入知识图谱右侧与趋势分区，请在运行脚本时启用分析扩展。",
+                "keep_count": 0,
+                "maybe_count": 0,
+            },
+        },
     )
     md_text = render_markdown_quick(target_day, args.tz, daily_groups)
 
@@ -5555,9 +6505,7 @@ def main() -> int:
     suffix_part = f"_{output_suffix}" if output_suffix else ""
 
     html_path = os.path.join(args.report_dir, f"arxiv_digest_{target_day.isoformat()}{suffix_part}.html")
-    html_latest_path = os.path.join(args.report_dir, f"arxiv_digest_latest{suffix_part}.html")
     md_path = os.path.join(args.report_dir, f"arxiv_digest_{target_day.isoformat()}{suffix_part}.md")
-    md_latest_path = os.path.join(args.report_dir, f"arxiv_digest_latest{suffix_part}.md")
     json_path = os.path.join(args.data_dir, f"arxiv_digest_{target_day.isoformat()}{suffix_part}.json")
 
     payload = {
@@ -5585,6 +6533,7 @@ def main() -> int:
             "ignore_fetched": bool(args.ignore_fetched),
             "fetch_state_signature": fetch_state_sig,
             "fetch_state_path": fetch_state_path,
+            "legacy_fetch_state_paths": legacy_fetch_state_paths,
             "latest_fetched_arxiv_id_before_run": latest_seen_id,
             "fetch_selection": selection_stats,
             "fetch_report_summary": fetch_report_summary,
@@ -5598,13 +6547,26 @@ def main() -> int:
             "focus_recent_scan": args.focus_recent_scan,
             "used_cached_snapshot": used_cached_snapshot,
             "cached_from_date": cached_from_date,
+            "focus_transfer": {
+                "status": "not_analyzed",
+                "status_zh": "当前未分析可迁移性",
+                "keep_count": 0,
+                "maybe_count": 0,
+            },
         },
     }
 
+    archive_dir, archived_count = archive_previous_reports(args.report_dir)
+    payload["notes"]["report_archive_dir"] = archive_dir
+    payload["notes"]["report_archived_count"] = archived_count
+    payload["notes"]["report_dir"] = args.report_dir
+    payload["notes"]["data_dir"] = args.data_dir
+    payload["notes"]["html_path"] = html_path
+    payload["notes"]["markdown_path"] = md_path
+    payload["notes"]["json_path"] = json_path
+    payload["notes"]["json_latest_path"] = last_success_path
     write_text(html_path, html_text)
-    write_text(html_latest_path, html_text)
     write_text(md_path, md_text)
-    write_text(md_latest_path, md_text)
     dump_json(json_path, payload)
     dump_json(last_success_path, payload)
     if not used_cached_snapshot:
@@ -5621,6 +6583,8 @@ def main() -> int:
             venue_pool_count=len(venue_pool),
             venue_watch_count=len(venue_watch),
         )
+        if legacy_fetch_state_paths:
+            fetch_state["legacy_source_paths"] = sorted(legacy_fetch_state_paths)
         dump_json(fetch_state_path, fetch_state)
 
     print(f"[OK] Daily papers total: {len(daily_papers)}")
@@ -5632,8 +6596,8 @@ def main() -> int:
     print(f"[OK] LLM cache: {llm_cache_path}")
     print(f"[OK] Google cache: {google_cache_path}")
     print(f"[OK] Last success snapshot: {last_success_path}")
+    print(f"[OK] Archived previous reports: {archived_count} -> {archive_dir}")
     print(f"[OK] HTML report: {html_path}")
-    print(f"[OK] HTML latest: {html_latest_path}")
     print(f"[OK] Markdown: {md_path}")
     print(f"[OK] JSON: {json_path}")
 

@@ -85,7 +85,8 @@
 
 - 直接复用主分支已经生成好的日报 JSON
 - 自动读取其中的 focus 论文和所有非 focus 论文，非 focus 全量仍用于报告展示
-- 先用 OpenRouter Elephant（或你显式配置的 OpenAI-compatible 模型）分析 focus 方向的发展趋势与热点问题
+- 当前增加了对本地Codex api的支持，默认显示用本地 codex 中的 gpt5.4 模型
+- 候补链为 OpenRouter Elephant、Kimi（或你显式配置的 OpenAI-compatible 模型）分析 focus 方向的发展趋势与热点问题
 - 再只对非 focus 中具备中稿线索的论文逐篇分析，判断它们的思想是否可以迁移到 focus 领域、如果可以该怎么迁移
 - 分析完成后会把结果直接整合回主日报：
   - 顶部新增“可迁移性分析”状态区

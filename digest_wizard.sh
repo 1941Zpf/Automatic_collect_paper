@@ -38,7 +38,7 @@ arXiv 论文日报向导
 
 说明：
   交互式运行时，执行前会额外询问是否启用 Focus Transfer 扩展。
-  该扩展默认启用；启用后会在日报生成完成后继续调用 Kimi 做 focus / non-focus 迁移分析。
+  该扩展默认启用；启用后会在日报生成完成后继续调用当前默认配置的迁移分析 API 做 focus / non-focus 迁移分析。
 EOF
 }
 

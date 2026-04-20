@@ -597,6 +597,22 @@ def extract_text_from_openai_stream(body: str) -> Tuple[str, str]:
         if isinstance(event.get("error"), dict):
             errors.append(safe_text(str(event["error"])))
             continue
+        event_type = safe_text(str(event.get("type", "")))
+        if event_type == "response.output_text.delta":
+            delta = safe_text(str(event.get("delta", "")))
+            if delta:
+                content_chunks.append(delta)
+            continue
+        if event_type == "response.output_text.done":
+            final_text = safe_text(str(event.get("text", "")))
+            if final_text and not content_chunks:
+                content_chunks.append(final_text)
+            continue
+        if event_type == "response.completed":
+            response = event.get("response")
+            if isinstance(response, dict) and response.get("error"):
+                errors.append(safe_text(str(response.get("error"))))
+            continue
         choices = event.get("choices", [])
         if not isinstance(choices, list):
             continue
@@ -711,41 +727,62 @@ def call_openai_json(
     base = normalize_api_base(api_base)
     mode = normalize_openai_endpoint_mode(endpoint_mode)
     prefer_chat_only = ("moonshot" in base.lower()) or ("kimi" in base.lower())
+    local_responses_mode = ("127.0.0.1" in base.lower()) or ("localhost" in base.lower())
 
     if mode in {"auto", "responses"} and not prefer_chat_only:
-        # Try OpenAI Responses API first.
-        response_payload = {
-            "model": model,
-            "input": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "text": {"format": {"type": "json_object"}},
-            "max_output_tokens": max_output_tokens,
-        }
-        data = http_post_json(f"{base}/responses", api_key=api_key, payload=response_payload, timeout=timeout)
-        if data:
-            output_text = data.get("output_text")
-            if isinstance(output_text, str) and output_text.strip():
-                try:
-                    return json.loads(output_text)
-                except Exception:
-                    return None
+        if local_responses_mode:
+            response_payload = {
+                "model": model,
+                "instructions": safe_text(system_prompt),
+                "input": [{"role": "user", "content": safe_text(user_prompt)}],
+                "text": {"format": {"type": "json_object"}},
+                "store": False,
+                "stream": True,
+            }
+            _data, streamed_text, _err = http_post_openai_chat_detailed(
+                f"{base}/responses",
+                api_key=api_key,
+                payload=response_payload,
+                timeout=timeout,
+            )
+            if streamed_text:
+                parsed = extract_json_object_from_text(streamed_text)
+                if parsed is not None:
+                    return parsed
+        else:
+            # Try standard OpenAI Responses API first.
+            response_payload = {
+                "model": model,
+                "input": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "text": {"format": {"type": "json_object"}},
+                "max_output_tokens": max_output_tokens,
+            }
+            data = http_post_json(f"{base}/responses", api_key=api_key, payload=response_payload, timeout=timeout)
+            if data:
+                output_text = data.get("output_text")
+                if isinstance(output_text, str) and output_text.strip():
+                    try:
+                        return json.loads(output_text)
+                    except Exception:
+                        return None
 
-            output = data.get("output", [])
-            chunks: List[str] = []
-            if isinstance(output, list):
-                for item in output:
-                    if not isinstance(item, dict):
-                        continue
-                    for content in item.get("content", []) or []:
-                        if isinstance(content, dict) and content.get("type") == "output_text":
-                            txt = content.get("text", "")
-                            if txt:
-                                chunks.append(txt)
-            merged = safe_text(" ".join(chunks))
-            if merged:
-                return extract_json_object_from_text(merged)
+                output = data.get("output", [])
+                chunks: List[str] = []
+                if isinstance(output, list):
+                    for item in output:
+                        if not isinstance(item, dict):
+                            continue
+                        for content in item.get("content", []) or []:
+                            if isinstance(content, dict) and content.get("type") == "output_text":
+                                txt = content.get("text", "")
+                                if txt:
+                                    chunks.append(txt)
+                merged = safe_text(" ".join(chunks))
+                if merged:
+                    return extract_json_object_from_text(merged)
 
     if mode in {"auto", "chat"}:
         # Fallback for OpenAI-compatible providers (e.g., Kimi/Moonshot).
@@ -2904,6 +2941,37 @@ def is_focus_paper(p: Paper) -> bool:
     return bool([tag for tag in clean_tag_list(p.focus_tags) if tag != "other"]) or focus_score(p) > 0
 
 
+def report_priority_sort_key(p: Paper, *, prefer_focus: bool = False) -> Tuple[int, int, int, float, dt.datetime, str]:
+    return (
+        accepted_rank(p),
+        1 if (prefer_focus and is_focus_paper(p)) else 0,
+        transfer_rank(p),
+        focus_score(p),
+        p.published,
+        safe_text(p.arxiv_id),
+    )
+
+
+def report_signal_badge_label(p: Paper) -> str:
+    if accepted_rank(p) <= 0:
+        return ""
+    return safe_text(p.accepted_venue) or safe_text(paper_signal_label(p))
+
+
+def render_report_badges(p: Paper) -> str:
+    badges: List[str] = []
+    signal_label = report_signal_badge_label(p)
+    if signal_label:
+        badges.append(
+            f"<span class='report-badge report-badge-signal'>中稿: {html.escape(signal_label)}</span>"
+        )
+    if is_focus_paper(p):
+        badges.append("<span class='report-badge report-badge-focus'>Focus</span>")
+    if not badges:
+        return ""
+    return f"<div class='report-badge-row'>{''.join(badges)}</div>"
+
+
 def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) -> str:
     groups: Dict[str, List[Paper]] = {}
     for p in venue_watch:
@@ -2917,11 +2985,11 @@ def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) 
 
     out: List[str] = []
     out.append("<section id='signal-table'><h2>中稿线索总表（动态分组）</h2>")
-    out.append("<p class='subtitle'>分组按线索关键词自动生成；每组内 Accepted 优先。</p>")
+    out.append("<p class='subtitle'>分组按线索关键词自动生成；每组内按中稿优先、Focus 优先、时间优先排序。</p>")
     out.append("<div class='signal-wrap'>")
     for g in ordered_keys:
         rows_all = groups[g]
-        rows_all.sort(key=lambda p: (accepted_rank(p), p.published), reverse=True)
+        rows_all.sort(key=lambda p: report_priority_sort_key(p, prefer_focus=True), reverse=True)
         rows = rows_all[:max_rows_per_group]
         out.append(f"<h3>{html.escape(g)} ({len(rows_all)})</h3>")
         out.append("<table class='signal-table'>")
@@ -2932,7 +3000,10 @@ def render_signal_table(venue_watch: List[Paper], max_rows_per_group: int = 40) 
             primary_label = paper_primary_link_label(p)
             secondary_label = paper_secondary_link_label(p)
             secondary_url = p.full_text_url or p.link_pdf or p.link_abs
-            title_block = html.escape(p.title)
+            title_block = f"<div class='signal-title-main'>{html.escape(p.title)}</div>"
+            badges_html = render_report_badges(p)
+            if badges_html:
+                title_block += badges_html
             if p.title_zh:
                 title_block += f"<div class='signal-title-zh'>{html.escape(p.title_zh)}</div>"
             out.append("<tr>")
@@ -4307,13 +4378,20 @@ def render_html_section_overview(title: str, papers: List[Paper], prefix: str) -
         out.append("<p>暂无记录。</p></section>")
         return "\n".join(out)
 
+    display_papers = list(papers)
+    if prefix == "focus-latest":
+        display_papers.sort(key=lambda p: report_priority_sort_key(p, prefer_focus=True), reverse=True)
+
     out.append("<div class='paper-list'>")
-    for i, p in enumerate(papers, start=1):
+    for i, p in enumerate(display_papers, start=1):
         domain_tags = clean_tag_list(p.domain_tags)
         task_tags = clean_tag_list(p.task_tags)
         type_tags = clean_tag_list(p.type_tags)
         out.append("<article class='paper-card'>")
         out.append(f"<h3>{i}. {html.escape(p.title)}</h3>")
+        badges_html = render_report_badges(p)
+        if badges_html:
+            out.append(badges_html)
         out.append(f"<p class='title-zh'>{html.escape(p.title_zh)}</p>")
         out.append(f"<p class='summary'>{html.escape(p.summary_zh)}</p>")
         out.append("<p class='meta'>")
@@ -4593,6 +4671,35 @@ section {
   background: #fff;
 }
 .paper-card h3 { margin: 0 0 8px; font-size: 17px; }
+.report-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.report-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.report-badge-signal {
+  color: #b85d08;
+  background: #fff6ec;
+  border-color: #f0bf8c;
+  box-shadow: inset 0 0 0 1px rgba(240, 191, 140, 0.22);
+}
+.report-badge-focus {
+  color: #0d7a63;
+  background: #eefaf5;
+  border-color: #b9e4d8;
+  box-shadow: inset 0 0 0 1px rgba(185, 228, 216, 0.24);
+}
 .title-zh { margin: 0 0 8px; color: #0f4f72; font-weight: 600; }
 .summary { margin: 0 0 10px; color: #1d2d3a; }
 .meta, .links { color: var(--muted); font-size: 13px; }
@@ -4601,6 +4708,7 @@ section {
 .signal-table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
 .signal-table th, .signal-table td { border: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
 .signal-table th { background: #f1f6fb; }
+.signal-title-main { color: #17324a; font-weight: 700; }
 .signal-title-zh { color: #0f4f72; font-weight: 600; margin-top: 4px; }
 .graph-section {
   padding: 0;

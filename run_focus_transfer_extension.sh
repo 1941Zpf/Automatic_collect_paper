@@ -78,6 +78,16 @@ secret_status() {
   fi
 }
 
+infer_focus_transfer_model_default() {
+  local chosen_base="${FOCUS_TRANSFER_API_BASE:-}"
+  local normalized="${chosen_base,,}"
+  if [[ -n "$normalized" && "$normalized" != *"openrouter"* && "$normalized" != *"openai"* && "$normalized" != *"moonshot"* && "$normalized" != *"kimi"* ]]; then
+    printf 'auto'
+    return 0
+  fi
+  printf '%s' "${OPENROUTER_MODEL:-${OPENAI_MODEL:-${KIMI_MODEL:-moonshot-v1-32k}}}"
+}
+
 : "${FOCUS_TRANSFER_DIGEST_JSON:=$ROOT_DIR/data/last_success_digest.json}"
 : "${FOCUS_TRANSFER_OUTPUT_SUFFIX:=}"
 : "${FOCUS_TRANSFER_REPORT_ROOT:=reports/focus_transfer}"
@@ -87,7 +97,7 @@ secret_status() {
 : "${OPENROUTER_MODEL:=openrouter/elephant-alpha}"
 : "${FOCUS_TRANSFER_API_BASE:=${OPENROUTER_API_BASE:-${OPENAI_BASE_URL:-${KIMI_API_BASE:-https://api.moonshot.cn/v1}}}}"
 : "${FOCUS_TRANSFER_API_KEY:=${OPENROUTER_API_KEY:-${OPENAI_API_KEY:-${KIMI_API_KEY:-}}}}"
-: "${FOCUS_TRANSFER_MODEL:=${OPENROUTER_MODEL:-${OPENAI_MODEL:-${KIMI_MODEL:-moonshot-v1-32k}}}}"
+: "${FOCUS_TRANSFER_MODEL:=$(infer_focus_transfer_model_default)}"
 : "${FOCUS_TRANSFER_ENDPOINT:=chat}"
 : "${FOCUS_TRANSFER_MESSAGE_STYLE:=normal}"
 : "${FOCUS_TRANSFER_STREAM:=0}"
@@ -103,7 +113,7 @@ if [[ -z "${FOCUS_TRANSFER_API_BASE:-}" ]]; then
   FOCUS_TRANSFER_API_BASE="${OPENROUTER_API_BASE:-${OPENAI_BASE_URL:-${KIMI_API_BASE:-https://api.moonshot.cn/v1}}}"
 fi
 if [[ -z "${FOCUS_TRANSFER_MODEL:-}" ]]; then
-  FOCUS_TRANSFER_MODEL="${OPENROUTER_MODEL:-${OPENAI_MODEL:-${KIMI_MODEL:-moonshot-v1-32k}}}"
+  FOCUS_TRANSFER_MODEL="$(infer_focus_transfer_model_default)"
 fi
 
 PRINT_CONFIG=0
@@ -118,6 +128,9 @@ if [[ "$PRINT_CONFIG" == "1" || "${FOCUS_TRANSFER_PRINT_CONFIG:-0}" == "1" ]]; t
   echo "[CONFIG] focus_transfer_backend=${FOCUS_TRANSFER_ANALYSIS_BACKEND}"
   echo "[CONFIG] focus_transfer_api_base=${FOCUS_TRANSFER_API_BASE}"
   echo "[CONFIG] focus_transfer_model=${FOCUS_TRANSFER_MODEL}"
+  if [[ "${FOCUS_TRANSFER_MODEL}" == "auto" ]]; then
+    echo "[CONFIG] focus_transfer_model_note=will auto-detect from ${FOCUS_TRANSFER_API_BASE%/}/models"
+  fi
   echo "[CONFIG] focus_transfer_api_key=$(secret_status "$FOCUS_TRANSFER_API_KEY")"
   echo "[CONFIG] focus_transfer_endpoint=${FOCUS_TRANSFER_ENDPOINT}"
   echo "[CONFIG] focus_transfer_message_style=${FOCUS_TRANSFER_MESSAGE_STYLE}"

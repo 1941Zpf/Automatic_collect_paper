@@ -10,6 +10,9 @@ import os
 import re
 import shutil
 import sys
+import time
+import urllib.error
+import urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -1301,11 +1304,46 @@ def update_focus_memory_files(
 
 
 def resolve_analysis_model(api_base: str, requested_model: str) -> str:
+    return resolve_analysis_model_with_key(api_base, requested_model, "")
+
+
+def request_model_catalog(url: str, api_key: str, timeout: int = 12, retries: int = 2) -> str:
+    headers = {
+        "User-Agent": os.environ.get("ARXIV_USER_AGENT", "arxiv-daily-digest/2.0 (research-bot)"),
+        "Connection": "close",
+        "Accept": "*/*",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, retries + 1):
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code in (401, 403):
+                raise
+            if exc.code not in (429, 500, 502, 503, 504) or attempt == retries:
+                raise
+            time.sleep(min(2.0, 0.6 * attempt))
+        except Exception as exc:
+            last_exc = exc
+            if attempt == retries:
+                break
+            time.sleep(min(2.0, 0.6 * attempt))
+    if last_exc:
+        raise last_exc
+    raise RuntimeError(f"Failed to fetch model catalog: {url}")
+
+
+def resolve_analysis_model_with_key(api_base: str, requested_model: str, api_key: str) -> str:
     requested = digest.safe_text(requested_model)
     if requested and requested.lower() != "auto":
         return requested
     base = digest.normalize_api_base(api_base)
-    raw = digest.request_url(f"{base}/models", timeout=12, retries=2, allow_partial=False)
+    raw = request_model_catalog(f"{base}/models", api_key=api_key, timeout=12, retries=2)
     data = json.loads(raw)
     for item in list(data.get("data", []) or []):
         model_id = digest.safe_text(str(item.get("id", "")))
@@ -1338,14 +1376,17 @@ def default_analysis_api_key() -> str:
 
 
 def default_analysis_model() -> str:
+    explicit = digest.safe_text(os.environ.get("FOCUS_TRANSFER_MODEL", ""))
+    if explicit:
+        return explicit
+    base = digest.normalize_api_base(default_analysis_api_base()).lower()
+    if base and not any(token in base for token in ("openrouter", "openai", "moonshot", "kimi")):
+        return "auto"
     return os.environ.get(
-        "FOCUS_TRANSFER_MODEL",
+        "OPENROUTER_MODEL",
         os.environ.get(
-            "OPENROUTER_MODEL",
-            os.environ.get(
-                "OPENAI_MODEL",
-                os.environ.get("KIMI_MODEL", "openrouter/elephant-alpha"),
-            ),
+            "OPENAI_MODEL",
+            os.environ.get("KIMI_MODEL", "openrouter/elephant-alpha"),
         ),
     )
 
@@ -1440,10 +1481,10 @@ def configure_analysis_provider_chain(primary_api_base: str, primary_api_key: st
         print("[WARN] Transfer analysis provider chain is empty.")
         return []
     primary = ANALYSIS_PROVIDER_CHAIN[0]
-    print(f"[INFO] Transfer analysis API: {provider_display(primary)}")
+    print(f"[INFO] Transfer analysis current primary API: {provider_display(primary)}")
     if len(ANALYSIS_PROVIDER_CHAIN) > 1:
         fallback_text = " -> ".join(provider_display(provider) for provider in ANALYSIS_PROVIDER_CHAIN[1:])
-        print(f"[INFO] Transfer analysis fallback chain: {fallback_text}")
+        print(f"[INFO] Transfer analysis fallback chain (only used if the current primary fails): {fallback_text}")
     ANALYSIS_PROVIDER_ANNOUNCED_INDEX = 0
     return ANALYSIS_PROVIDER_CHAIN
 
@@ -1490,7 +1531,7 @@ def call_analysis_json_with_provider_fallback(
         if isinstance(result, dict):
             if provider_index != ANALYSIS_PROVIDER_ACTIVE_INDEX:
                 previous = ANALYSIS_PROVIDER_CHAIN[ANALYSIS_PROVIDER_ACTIVE_INDEX]
-                print(f"[INFO] Transfer analysis API switched: {provider_display(previous)} -> {provider_display(provider)}")
+                print(f"[INFO] Transfer analysis API switched to fallback: {provider_display(previous)} -> {provider_display(provider)}")
             ANALYSIS_PROVIDER_ACTIVE_INDEX = provider_index
             notes.append(f"provider: {provider_display(provider)}")
             return result, notes
@@ -4933,8 +4974,8 @@ def main() -> int:
 
     if args.analysis_backend == "local":
         backend_label = "OpenRouter/OpenAI-compatible"
-        model = resolve_analysis_model(args.analysis_api_base, args.analysis_model)
         api_key = digest.safe_text(args.analysis_api_key)
+        model = resolve_analysis_model_with_key(args.analysis_api_base, args.analysis_model, api_key)
         endpoint_mode = digest.normalize_openai_endpoint_mode(args.analysis_endpoint_mode)
         message_style = digest.normalize_openai_message_style(args.analysis_message_style)
         stream = bool(args.analysis_stream)
